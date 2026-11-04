@@ -1,94 +1,48 @@
-# Gertec Academy — MVP corporativo
+# Gertec Academy — versão ampliada
 
-MVP de portal LMS com identidade visual Gertec. A aplicação é web: colaboradores e RH acessam pelo navegador, sem instalar Python localmente.
+Plataforma corporativa de aprendizagem em FastAPI, SQLAlchemy e PostgreSQL, com interface em português e identidade visual Gertec (azul institucional e amarelo).
 
-## O que já está implementado
-- Login federado Microsoft Entra ID (OpenID Connect).
-- Provisionamento automático do usuário no primeiro login.
-- Papéis `admin`, `rh` e `colaborador`, definidos por listas de e-mails.
-- Biblioteca de cursos com links para vídeos SharePoint/OneDrive.
-- Campanhas que reutilizam cursos existentes e atribuem treinamentos aos colaboradores sincronizados.
-- Área do colaborador com treinamentos atribuídos.
-- Registro de conclusão e emissão de certificado com código único.
-- Relatório gerencial com totais de matrículas, concluídos, pendentes e taxa de conclusão; exportação CSV completa com colaborador, e-mail, departamento, curso, progresso, status, datas e campanha.
-- Sincronização de usuários via Microsoft Graph com paginação (até 10.000 usuários por execução).
+## Novos recursos desta versão
 
-## 1. Publicar no GitHub e Render
-1. Envie todos os arquivos e pastas deste projeto para a raiz do repositório GitHub.
-2. No Render, crie um Web Service conectado ao repositório, runtime Docker.
-3. Use o plano Free apenas para piloto. O serviço pode hibernar após inatividade.
-4. Configure as variáveis de ambiente descritas abaixo.
-5. Use PostgreSQL gerenciado persistente (por exemplo, Supabase). Não use SQLite em produção.
-6. Configure `COOKIE_SECURE=true` em produção HTTPS.
+- **Grupos de usuários:** RH/administrador cria grupos, inclui ou remove participantes e direciona campanhas para grupos selecionados. Se nenhum grupo for escolhido na campanha, ela é distribuída a todos os colaboradores ativos.
+- **Perfis e permissões por módulo:** administrador, RH, gestor e colaborador. O administrador pode habilitar/desabilitar módulos por perfil em `/admin/permissions`; as verificações são aplicadas no backend. Administradores mantêm acesso total.
+- **Perfil e diretório:** usuário altera a própria foto (JPG, PNG ou WebP, até 3 MB) e localiza colegas por nome/departamento.
+- **Fórum:** criação de tópicos e respostas entre usuários autenticados.
+- **Disponibilidade dos cursos:** data/hora de início e encerramento, interpretadas no fuso `America/Sao_Paulo`. Cursos fora da janela não podem ser acessados.
+- **Progresso individual:** o primeiro acesso marca o curso como iniciado; o colaborador pode atualizar manualmente o percentual e registrar conclusão. O dashboard mostra o progresso médio e por curso.
+- **Relatório CSV:** exporta somente matrículas iniciadas, com nome, e-mail, departamento, grupos, treinamento, percentual, status, data de início, última atividade, conclusão, atribuição e campanha.
 
-## 2. Configurar Microsoft Entra ID (SSO)
-No Microsoft Entra admin center:
-1. App registrations > New registration.
-2. Nome: `Gertec Academy`.
-3. Supported account types: Accounts in this organizational directory only (single tenant).
-4. Em Authentication, adicione plataforma Web e Redirect URI: `https://SEU-DOMINIO/auth/callback`.
-5. Crie um client secret em Certificates & secrets e copie o valor imediatamente.
-6. Em API permissions, confirme `openid`, `profile`, `email` (delegated / OIDC); `User.Read` delegated para login.
-7. Para sincronização de diretório via Microsoft Graph, configure também permissões **Application** `User.Read.All` e conceda admin consent. A sincronização usa client credentials; use credenciais dedicadas e política de rotação.
-8. Restrinja o consentimento e valide com a equipe de identidade/segurança antes de liberar.
+## Rotas principais
 
-Variáveis de ambiente:
-- `ENTRA_TENANT_ID`: Directory (tenant) ID.
-- `ENTRA_CLIENT_ID`: Application (client) ID do app de login.
-- `ENTRA_CLIENT_SECRET`: segredo do app de login.
-- `ENTRA_REDIRECT_URI`: `https://SEU-DOMINIO/auth/callback`.
-- `ADMIN_EMAILS`: e-mails de administradores separados por vírgula.
-- `HR_EMAILS`: e-mails autorizados do RH separados por vírgula.
-- `GRAPH_TENANT_ID`, `GRAPH_CLIENT_ID`, `GRAPH_CLIENT_SECRET`: credenciais de aplicativo com `User.Read.All` e admin consent. Podem usar o mesmo registro, se aprovado pela equipe de identidade.
-- `DATABASE_URL`: conexão PostgreSQL.
-- `SECRET_KEY`: segredo aleatório longo e exclusivo.
-- `COOKIE_SECURE`: `true`.
+- `/login` — login padrão e botão SSO opcional.
+- `/setup` — criação do primeiro administrador, somente quando o banco ainda não possui usuários.
+- `/admin/users` — cadastro de usuários.
+- `/admin/groups` — gestão de grupos e participantes.
+- `/admin/permissions` — permissões por perfil (administrador).
+- `/directory` — diretório de colaboradores.
+- `/forum` — fórum corporativo.
+- `/profile` — foto e perfil do usuário.
+- `/courses` — biblioteca e cadastro de cursos (RH/administrador).
+- `/campaigns` — campanhas por curso e grupo.
+- `/reports` e `/reports.csv` — indicadores e exportação.
 
-Os usuários não listados em `ADMIN_EMAILS` ou `HR_EMAILS` entram como `colaborador`. O perfil é reavaliado no login. Proteja as listas de e-mails como configuração administrativa.
+## Variáveis de ambiente
 
-## 3. OneDrive / SharePoint
-O MVP registra links corporativos para o vídeo, sem copiar os arquivos. No cadastro do curso, cole um link de compartilhamento ou link de incorporação compatível com iframe. O colaborador ainda precisa ter permissão no SharePoint/OneDrive para assistir.
+Mantenha as variáveis já utilizadas no deploy: `DATABASE_URL`, `SECRET_KEY`, `COOKIE_SECURE`, `ENTRA_TENANT_ID`, `ENTRA_CLIENT_ID`, `ENTRA_CLIENT_SECRET`, `ENTRA_REDIRECT_URI`, `ADMIN_EMAILS`, `HR_EMAILS`, `GRAPH_TENANT_ID`, `GRAPH_CLIENT_ID` e `GRAPH_CLIENT_SECRET`. O SSO continua opcional: sem as variáveis `ENTRA_*`, o login padrão funciona.
 
-Para produção, prefira:
-- Biblioteca SharePoint dedicada para treinamento.
-- Permissões de leitura para o público da campanha.
-- Link de incorporação/visualização aprovado pelo tenant.
-- Não habilitar links públicos anônimos sem aprovação.
-- Se o link normal de compartilhamento não abrir em iframe, usar botão "Abrir vídeo" ou obter o embed link correto no SharePoint.
+## Deploy
 
-## 4. Como usar
-1. Configure SSO e entre com a conta Microsoft.
-2. Adicione o e-mail do responsável em `ADMIN_EMAILS` e os responsáveis de RH em `HR_EMAILS`.
-3. Administrador abre `/admin/sync-users` para importar/atualizar usuários do diretório (permissão Graph necessária).
-4. RH cria cursos em Biblioteca de cursos.
-5. RH cria campanhas e seleciona cursos; os cursos são atribuídos aos usuários sincronizados com perfil colaborador.
-6. Colaborador entra pelo SSO, acessa o curso e registra a conclusão.
-7. RH exporta relatório CSV.
+1. Faça backup do banco PostgreSQL antes de atualizar.
+2. Substitua os arquivos do repositório pelo conteúdo deste pacote e faça commit.
+3. O Render deve iniciar novo deploy. As migrações aditivas criam as novas colunas e tabelas; ainda assim, faça backup antes.
+4. Confirme `DATABASE_URL` apontando para PostgreSQL persistente e `SECRET_KEY` forte. Não use SQLite em produção no Render.
+5. Crie/valide a conta administradora e configure permissões e grupos.
 
-## Limitações deliberadas do MVP — não tratar como pronto para produção
-- A sincronização Graph percorre páginas do diretório até o limite de 10.000 usuários por execução; grupos e filtros por unidade ainda precisam ser implementados.
-- O MVP ainda não implementa upload de arquivos para SharePoint via Graph; o RH cadastra links existentes.
-- O MVP não mede automaticamente a duração assistida do vídeo. A conclusão é declarada pelo colaborador, não prova presença ou visualização integral.
-- Não há ainda avaliação com nota, regras condicionais de certificado, QR check-in de presença presencial, lembretes por e-mail, recuperação de acesso ou painel de auditoria detalhado.
-- Adicionar proteção CSRF, rate limiting, logs de auditoria, testes de autorização, validação de URLs SharePoint, política de retenção e revisão LGPD antes de uso corporativo.
-- Certificado nesta versão é um registro web imprimível via navegador; PDF assinado/QR de validação pública é evolução posterior.
-- Validar integração, permissões Graph, política de cookies e regras de acesso com TI/Segurança da Gertec antes de disponibilizar a colaboradores.
+## Limitações importantes antes de produção
 
-## Identidade visual
-A interface usa a paleta institucional baseada na marca Gertec: azul-marinho/azul para estrutura e séries principais, amarelo para destaques e estados pendentes, com cinzas neutros para fundos e grades.
-
-## Segurança
-Nunca comite client secrets, strings de conexão ou `SECRET_KEY` no GitHub. Configure-os somente em Render > Environment. Não use dados reais de colaboradores até concluir revisão de segurança e privacidade.
-
-## Autenticação: login padrão e Microsoft Entra ID opcional
-
-A tela `/login` oferece dois caminhos independentes:
-
-- **Login padrão:** e-mail e senha cadastrados pelo administrador/RH. Senhas são armazenadas com PBKDF2-HMAC-SHA256 e salt individual.
-- **Entrar com Microsoft (SSO):** aparece somente quando `ENTRA_TENANT_ID`, `ENTRA_CLIENT_ID` e `ENTRA_CLIENT_SECRET` estão configurados. Para iniciar sem integração, basta deixar essas variáveis vazias; o login padrão continua funcionando.
-
-No primeiro acesso, se ainda não existir nenhum usuário, use `/setup` para criar a primeira conta administradora (senha mínima de 12 caracteres). Depois, entre em **Usuários** para cadastrar colaboradores, RH e outros administradores. O RH e o administrador podem criar contas locais.
-
-Quando o SSO for habilitado futuramente, um colaborador local poderá usar o mesmo e-mail no botão Microsoft. O sistema vincula a identidade Entra ID à conta existente e preserva o perfil local atribuído. Configure a Redirect URI `https://SEU-DOMINIO/auth/callback` no App Registration.
-
-**Atenção para produção:** habilite HTTPS e `COOKIE_SECURE=true`, configure `SECRET_KEY` forte, implemente política de recuperação/troca de senha, MFA conforme política corporativa, rate limiting, CSRF e auditoria antes de uso amplo. O cadastro inicial `/setup` fica automaticamente bloqueado depois que a primeira conta é criada.
+- O percentual de progresso é atualizado pelo colaborador e a abertura do curso marca o início. **Não há telemetria automática do vídeo**, portanto não é prova técnica de que o vídeo foi assistido integralmente. Para isso, integrar player compatível com xAPI/SCORM ou mecanismo de tracking aprovado.
+- As fotos são salvas em `static/uploads`. Em Render sem disco persistente, uploads locais podem ser perdidos em novo deploy/restart. Para produção, conectar Azure Blob Storage ou SharePoint/OneDrive via Microsoft Graph.
+- O fórum nesta versão tem tópicos e respostas, mas ainda não tem moderação avançada, denúncias, anexos, mensagens privadas ou notificações.
+- Permissões são por perfil e módulo; grupos atualmente segmentam o direcionamento de campanhas, não substituem RBAC por grupo.
+- Antes de produção corporativa, implementar proteção CSRF, rate limiting, trilha de auditoria, política de retenção, revisão LGPD, antivírus para uploads, política de senha/reset e testes de carga/segurança.
+- O SSO Microsoft continua opcional e separado do login local. A sincronização Graph requer consentimento administrativo e permissões de aplicação configuradas no Entra ID.

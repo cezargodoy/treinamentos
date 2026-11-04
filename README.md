@@ -46,3 +46,10 @@ Mantenha as variáveis já utilizadas no deploy: `DATABASE_URL`, `SECRET_KEY`, `
 - Permissões são por perfil e módulo; grupos atualmente segmentam o direcionamento de campanhas, não substituem RBAC por grupo.
 - Antes de produção corporativa, implementar proteção CSRF, rate limiting, trilha de auditoria, política de retenção, revisão LGPD, antivírus para uploads, política de senha/reset e testes de carga/segurança.
 - O SSO Microsoft continua opcional e separado do login local. A sincronização Graph requer consentimento administrativo e permissões de aplicação configuradas no Entra ID.
+
+## Atualizações desta versão
+- Administração exclusiva para editar contas: `/admin/users/{id}/edit` permite alterar nome, e-mail, departamento, perfil, status ativo/inativo e senha. RH pode cadastrar e consultar, mas não alterar configurações existentes.
+- Administrador pode alternar entre visão administrativa e visão de aluno pelo botão no dashboard. Na visão de aluno, a plataforma cria matrículas pessoais para os cursos publicados para permitir testar o fluxo de aprendizagem; isso gera registros reais de matrícula e deve ser considerado nos relatórios.
+- Campanhas podem ser direcionadas simultaneamente a múltiplos perfis de acesso. A seleção de grupos também pode ser combinada com os perfis.
+- Apenas administrador pode criar ou editar configurações de campanhas. Cada campanha exibe uma barra com a média do progresso das matrículas vinculadas.
+- A edição de campanhas altera metadados e associações de cursos/perfis; matrículas históricas existentes não são removidas automaticamente para preservar evidências de aprendizagem.

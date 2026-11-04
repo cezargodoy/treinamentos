@@ -51,6 +51,11 @@ class Campaign(Base):
     due_date:Mapped[str]=mapped_column(String(10),default="")
     active:Mapped[bool]=mapped_column(Boolean,default=True)
     created_at:Mapped[datetime]=mapped_column(DateTime,default=datetime.utcnow)
+class CampaignRole(Base):
+    __tablename__="campaign_roles"
+    id:Mapped[int]=mapped_column(primary_key=True)
+    campaign_id:Mapped[int]=mapped_column(ForeignKey("campaigns.id"))
+    role:Mapped[str]=mapped_column(String(30))
 class CampaignCourse(Base):
     __tablename__="campaign_courses"
     id:Mapped[int]=mapped_column(primary_key=True)
@@ -203,9 +208,28 @@ def create_user(request:Request,name:str=Form(...),email:str=Form(...),departmen
     s=db();require(request,s,["admin","rh"]);email=email.strip().lower()
     if role not in ("admin","rh","gestor","colaborador") or len(password)<12 or s.query(User).filter(func.lower(User.email)==email).first():
         users=s.query(User).order_by(User.name).all();actor=user_for(request,s);s.close()
-        return render("users.html",user=actor,users=users,message="Verifique os dados: e-mail não cadastrado, perfil válido e senha com pelo menos 12 caracteres.")
+        return render("users.html",user=actor,users=users,message="Verifique os dados: e-mail único, perfil válido e senha com pelo menos 12 caracteres.")
     s.add(User(entra_oid="local:"+email,name=name.strip(),email=email,department=department.strip(),role=role,password_hash=password_digest(password),last_login=datetime.utcnow()))
     s.commit();s.close();return RedirectResponse("/admin/users",303)
+@app.get("/admin/users/{uid}/edit",response_class=HTMLResponse)
+def edit_user_page(uid:int,request:Request):
+    s=db();actor=require(request,s,["admin"]);item=s.get(User,uid)
+    if not item:s.close();raise HTTPException(404)
+    result=render("user_edit.html",user=actor,item=item);s.close();return result
+@app.post("/admin/users/{uid}/edit")
+def edit_user(uid:int,request:Request,name:str=Form(...),email:str=Form(...),department:str=Form(""),role:str=Form(...),active:str=Form(""),new_password:str=Form("")):
+    s=db();require(request,s,["admin"]);item=s.get(User,uid);email=email.strip().lower()
+    if not item:s.close();raise HTTPException(404)
+    duplicate=s.query(User).filter(func.lower(User.email)==email,User.id!=uid).first()
+    if duplicate or role not in ("admin","rh","gestor","colaborador") or (new_password and len(new_password)<12):
+        result=render("user_edit.html",user=user_for(request,s),item=item,message="E-mail já utilizado, perfil inválido ou senha com menos de 12 caracteres.");s.close();return result
+    item.name=name.strip();item.email=email;item.department=department.strip();item.role=role;item.active=(active=="on")
+    if item.entra_oid.startswith("local:"):item.entra_oid="local:"+email
+    if new_password:item.password_hash=password_digest(new_password)
+    s.commit();s.close();return RedirectResponse("/admin/users",303)
+@app.post("/admin/learner-mode")
+def learner_mode(request:Request,enabled:str=Form("")):
+    s=db();u=require(request,s,["admin"]);request.session["learner_view"]=(enabled=="on");s.close();return RedirectResponse("/",303)
 @app.get("/auth/callback",name="auth_callback")
 async def auth_callback(request:Request):
     if not oauth.create_client("entra"): raise HTTPException(503,"Entra ID não configurado")
@@ -232,11 +256,15 @@ def logout(request:Request):
 def home(request:Request):
     s=db();u=user_for(request,s)
     if not u:s.close();return RedirectResponse("/login",303)
-    if u.role in ("admin","rh","gestor"):
+    if u.role in ("admin","rh","gestor") and not (u.role=="admin" and request.session.get("learner_view")):
         total=s.query(Enrollment).count();done=s.query(Enrollment).filter_by(status="Concluído").count()
         ctx=dict(user=u,admin=True,users=s.query(User).count(),courses=s.query(Course).count(),campaigns=s.query(Campaign).filter_by(active=True).count(),done=done,total=total,pct=round(done*100/total) if total else 0)
     else:
         es=s.query(Enrollment).filter_by(user_id=u.id).all()
+        if u.role=="admin" and request.session.get("learner_view"):
+            for course in s.query(Course).filter_by(published=True).all():
+                if not s.query(Enrollment).filter_by(user_id=u.id,course_id=course.id).first():s.add(Enrollment(user_id=u.id,course_id=course.id))
+            s.commit();es=s.query(Enrollment).filter_by(user_id=u.id).all()
         ctx=dict(user=u,admin=False,enrollments=[(e,s.get(Course,e.course_id)) for e in es],certs=s.query(Certificate).filter_by(user_id=u.id).count(),avg_progress=round(sum(e.progress for e in es)/len(es)) if es else 0)
     s.close();return render("dashboard.html",**ctx)
 @app.get("/courses",response_class=HTMLResponse)
@@ -254,27 +282,52 @@ def add_course(request:Request,title:str=Form(...),description:str=Form(""),cate
     s.add(Course(title=title,description=description,category=category,duration_minutes=duration,sharepoint_url=sharepoint_url,available_from=start,available_until=end));s.commit();s.close();return RedirectResponse("/courses",303)
 @app.get("/campaigns",response_class=HTMLResponse)
 def campaigns(request:Request):
-    s=db();u=require(request,s,["admin","rh"]);cs=s.query(Campaign).order_by(Campaign.created_at.desc()).all();courses=s.query(Course).all();groups=s.query(UserGroup).order_by(UserGroup.name).all();s.close()
-    return render("campaigns.html",user=u,campaigns=cs,courses=courses,groups=groups)
+    s=db();u=require(request,s,["admin","rh"]);cs=s.query(Campaign).order_by(Campaign.created_at.desc()).all();courses=s.query(Course).all();groups=s.query(UserGroup).order_by(UserGroup.name).all();users=s.query(User).filter_by(active=True).all()
+    data=[]
+    for c in cs:
+        es=s.query(Enrollment).filter_by(campaign_id=c.id).all();avg=round(sum(e.progress for e in es)/len(es)) if es else 0
+        data.append((c,avg,len(es),sum(1 for e in es if e.status=="Concluído")))
+    result=render("campaigns.html",user=u,campaigns=data,courses=courses,groups=groups,users=users,roles=["colaborador","gestor","rh","admin"]);s.close();return result
 @app.post("/campaigns")
-def add_campaign(request:Request,title:str=Form(...),description:str=Form(""),due_date:str=Form(""),course_ids:list[int]=Form([]),group_ids:list[int]=Form([])):
-    s=db();require(request,s,["admin","rh"]);c=Campaign(title=title,description=description,due_date=due_date);s.add(c);s.flush()
+def add_campaign(request:Request,title:str=Form(...),description:str=Form(""),due_date:str=Form(""),course_ids:list[int]=Form([]),group_ids:list[int]=Form([]),roles:list[str]=Form([])):
+    s=db();require(request,s,["admin"]);c=Campaign(title=title,description=description,due_date=due_date);s.add(c);s.flush()
+    valid_roles={"colaborador","gestor","rh","admin"};roles=[r for r in roles if r in valid_roles]
+    for role in roles:s.add(CampaignRole(campaign_id=c.id,role=role))
+    for cid in course_ids:
+        if s.get(Course,cid):s.add(CampaignCourse(campaign_id=c.id,course_id=cid))
     target_ids=set()
-    if group_ids:
-        for m in s.query(GroupMember).filter(GroupMember.group_id.in_(group_ids)).all():target_ids.add(m.user_id)
-    else: target_ids={usr.id for usr in s.query(User).filter_by(active=True).filter(User.role=="colaborador").all()}
+    if roles:target_ids.update(x.id for x in s.query(User).filter_by(active=True).filter(User.role.in_(roles)).all())
+    if group_ids:target_ids.update(m.user_id for m in s.query(GroupMember).filter(GroupMember.group_id.in_(group_ids)).all())
+    if not roles and not group_ids:target_ids.update(x.id for x in s.query(User).filter_by(active=True,role="colaborador").all())
     for cid in course_ids:
         if s.get(Course,cid):
-            s.add(CampaignCourse(campaign_id=c.id,course_id=cid))
             for uid in target_ids:
-                if not s.query(Enrollment).filter_by(user_id=uid,course_id=cid,campaign_id=c.id).first(): s.add(Enrollment(user_id=uid,course_id=cid,campaign_id=c.id))
+                if not s.query(Enrollment).filter_by(user_id=uid,course_id=cid,campaign_id=c.id).first():s.add(Enrollment(user_id=uid,course_id=cid,campaign_id=c.id))
+    s.commit();s.close();return RedirectResponse("/campaigns",303)
+@app.get("/campaigns/{campaign_id}/edit",response_class=HTMLResponse)
+def campaign_edit_page(campaign_id:int,request:Request):
+    s=db();actor=require(request,s,["admin"]);c=s.get(Campaign,campaign_id)
+    if not c:s.close();raise HTTPException(404)
+    result=render("campaign_edit.html",user=actor,campaign=c,courses=s.query(Course).all(),selected_courses=[x.course_id for x in s.query(CampaignCourse).filter_by(campaign_id=c.id)],selected_roles=[x.role for x in s.query(CampaignRole).filter_by(campaign_id=c.id)],roles=["colaborador","gestor","rh","admin"]);s.close();return result
+@app.post("/campaigns/{campaign_id}/edit")
+def campaign_edit(campaign_id:int,request:Request,title:str=Form(...),description:str=Form(""),due_date:str=Form(""),active:str=Form(""),course_ids:list[int]=Form([]),roles:list[str]=Form([])):
+    s=db();require(request,s,["admin"]);c=s.get(Campaign,campaign_id)
+    if not c:s.close();raise HTTPException(404)
+    c.title=title;c.description=description;c.due_date=due_date;c.active=(active=="on")
+    s.query(CampaignCourse).filter_by(campaign_id=c.id).delete();s.query(CampaignRole).filter_by(campaign_id=c.id).delete()
+    for cid in course_ids:
+        if s.get(Course,cid):s.add(CampaignCourse(campaign_id=c.id,course_id=cid))
+    for role in set(roles):
+        if role in ("colaborador","gestor","rh","admin"):s.add(CampaignRole(campaign_id=c.id,role=role))
     s.commit();s.close();return RedirectResponse("/campaigns",303)
 @app.get("/learn/{cid}",response_class=HTMLResponse)
 def learn(cid:int,request:Request):
     s=db();u=require(request,s);c=s.get(Course,cid)
     e=s.query(Enrollment).filter_by(user_id=u.id,course_id=cid).first()
+    if not e and u.role=="admin" and request.session.get("learner_view") and c:
+        e=Enrollment(user_id=u.id,course_id=cid);s.add(e);s.flush()
     now=datetime.now(ZoneInfo("America/Sao_Paulo")).replace(tzinfo=None)
-    if not c or (u.role=="colaborador" and not e):s.close();raise HTTPException(404)
+    if not c or (u.role=="admin" and not request.session.get("learner_view")) or (u.role!="admin" and not e):s.close();raise HTTPException(404)
     if c.available_from and now<c.available_from: s.close();raise HTTPException(403,"Este treinamento ainda não está disponível.")
     if c.available_until and now>c.available_until: s.close();raise HTTPException(403,"O período deste treinamento foi encerrado.")
     if e:

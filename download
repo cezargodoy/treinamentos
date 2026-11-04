@@ -1,7 +1,10 @@
+.git
+.github
 __pycache__/
 *.py[cod]
 *.db
+*.sqlite*
 .env
 .venv/
 venv/
-.DS_Store
+static/uploads/*

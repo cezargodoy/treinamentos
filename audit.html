@@ -1,0 +1,4 @@
+{% extends 'base.html' %}{% block content %}
+<div class="heading"><div><span class="eyebrow">GOVERNANÇA E RASTREABILIDADE</span><h1>Trilha de auditoria</h1><p>Registro das principais alterações administrativas realizadas na plataforma.</p></div></div>
+<section class="card"><div class="table-wrap"><table><thead><tr><th>Data e hora</th><th>Responsável</th><th>Ação</th><th>Entidade</th><th>Identificador</th><th>Detalhes</th><th>IP</th></tr></thead><tbody>{% for log,actor in items %}<tr><td>{{log.created_at.strftime('%d/%m/%Y %H:%M:%S')}}</td><td>{{actor.name if actor else 'Sistema'}}</td><td>{{log.action}}</td><td>{{log.entity_type}}</td><td>{{log.entity_id}}</td><td>{{log.details}}</td><td>{{log.ip_address}}</td></tr>{% else %}<tr><td colspan="7">Ainda não existem eventos de auditoria.</td></tr>{% endfor %}</tbody></table></div></section>
+{% endblock %}

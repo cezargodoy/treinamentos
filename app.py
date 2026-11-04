@@ -12,8 +12,16 @@ from sqlalchemy import create_engine, String, Integer, Boolean, DateTime, Foreig
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
-DATABASE_URL=os.getenv("DATABASE_URL","sqlite:///./gertec_academy.db")
-if DATABASE_URL.startswith("postgres://"): DATABASE_URL=DATABASE_URL.replace("postgres://","postgresql://",1)
+APP_ENV=os.getenv("APP_ENV","development").lower()
+DATABASE_URL=os.getenv("DATABASE_URL", "" if APP_ENV=="production" else "sqlite:///./gertec_academy.db")
+if not DATABASE_URL:
+    raise RuntimeError("DATABASE_URL não configurada. Em produção, configure um PostgreSQL persistente no Render.")
+if DATABASE_URL.startswith("postgres://"): DATABASE_URL=DATABASE_URL.replace("postgres://","postgresql+psycopg://",1)
+elif DATABASE_URL.startswith("postgresql://"): DATABASE_URL=DATABASE_URL.replace("postgresql://","postgresql+psycopg://",1)
+if APP_ENV=="production" and DATABASE_URL.startswith("sqlite"):
+    raise RuntimeError("SQLite não é permitido em produção. Configure DATABASE_URL com PostgreSQL persistente.")
+if APP_ENV=="production" and len(os.getenv("SECRET_KEY","")) < 32:
+    raise RuntimeError("Configure SECRET_KEY com pelo menos 32 caracteres no ambiente de produção.")
 if DATABASE_URL.startswith("sqlite"): connect_args={"check_same_thread":False}
 else: connect_args={}
 engine=create_engine(DATABASE_URL,connect_args=connect_args,pool_pre_ping=True)
@@ -73,6 +81,27 @@ class Enrollment(Base):
     completed_at:Mapped[datetime|None]=mapped_column(DateTime,nullable=True)
     started_at:Mapped[datetime|None]=mapped_column(DateTime,nullable=True)
     last_activity:Mapped[datetime|None]=mapped_column(DateTime,nullable=True)
+    watched_seconds:Mapped[int]=mapped_column(Integer,default=0)
+class LearningEvent(Base):
+    __tablename__="learning_events"
+    id:Mapped[int]=mapped_column(primary_key=True)
+    enrollment_id:Mapped[int]=mapped_column(ForeignKey("enrollments.id"),index=True)
+    user_id:Mapped[int]=mapped_column(ForeignKey("users.id"),index=True)
+    course_id:Mapped[int]=mapped_column(ForeignKey("courses.id"),index=True)
+    event_type:Mapped[str]=mapped_column(String(40))
+    position_seconds:Mapped[int]=mapped_column(Integer,default=0)
+    delta_seconds:Mapped[int]=mapped_column(Integer,default=0)
+    created_at:Mapped[datetime]=mapped_column(DateTime,default=datetime.utcnow,index=True)
+class AuditLog(Base):
+    __tablename__="audit_logs"
+    id:Mapped[int]=mapped_column(primary_key=True)
+    actor_user_id:Mapped[int|None]=mapped_column(ForeignKey("users.id"),nullable=True,index=True)
+    action:Mapped[str]=mapped_column(String(100),index=True)
+    entity_type:Mapped[str]=mapped_column(String(80))
+    entity_id:Mapped[str]=mapped_column(String(80),default="")
+    details:Mapped[str]=mapped_column(Text,default="")
+    ip_address:Mapped[str]=mapped_column(String(80),default="")
+    created_at:Mapped[datetime]=mapped_column(DateTime,default=datetime.utcnow,index=True)
 class UserGroup(Base):
     __tablename__="user_groups"
     id:Mapped[int]=mapped_column(primary_key=True)
@@ -123,8 +152,9 @@ with engine.begin() as conn:
     cols={c["name"] for c in inspect(engine).get_columns("enrollments")}
     if "started_at" not in cols: conn.execute(text("ALTER TABLE enrollments ADD COLUMN started_at TIMESTAMP NULL"))
     if "last_activity" not in cols: conn.execute(text("ALTER TABLE enrollments ADD COLUMN last_activity TIMESTAMP NULL"))
+    if "watched_seconds" not in cols: conn.execute(text("ALTER TABLE enrollments ADD COLUMN watched_seconds INTEGER NOT NULL DEFAULT 0"))
 
-app=FastAPI(title="Gertec Academy")
+app=FastAPI(title="Gertec Academy", version="4.0.0")
 app.add_middleware(SessionMiddleware,secret_key=os.getenv("SECRET_KEY","development-only-change-me"),same_site="lax",https_only=os.getenv("COOKIE_SECURE","false").lower()=="true",max_age=43200)
 os.makedirs("static/uploads",exist_ok=True)
 app.mount("/static",StaticFiles(directory="static"),name="static")
@@ -156,6 +186,9 @@ def require(request,s,roles=None):
     return u
 def render(name,**ctx):
     return HTMLResponse(templates.get_template(name).render(**ctx))
+def audit(s, request, actor, action, entity_type, entity_id="", details=""):
+    ip=request.client.host if request.client else ""
+    s.add(AuditLog(actor_user_id=actor.id if actor else None,action=action,entity_type=entity_type,entity_id=str(entity_id),details=details[:4000],ip_address=ip))
 @app.get("/health")
 def health(): return {"status":"ok"}
 def password_digest(password: str) -> str:
@@ -226,6 +259,7 @@ def edit_user(uid:int,request:Request,name:str=Form(...),email:str=Form(...),dep
     item.name=name.strip();item.email=email;item.department=department.strip();item.role=role;item.active=(active=="on")
     if item.entra_oid.startswith("local:"):item.entra_oid="local:"+email
     if new_password:item.password_hash=password_digest(new_password)
+    audit(s,request,user_for(request,s),"user.updated","user",item.id,f"Perfil={role}; ativo={item.active}")
     s.commit();s.close();return RedirectResponse("/admin/users",303)
 @app.post("/admin/learner-mode")
 def learner_mode(request:Request,enabled:str=Form("")):
@@ -303,6 +337,7 @@ def add_campaign(request:Request,title:str=Form(...),description:str=Form(""),du
         if s.get(Course,cid):
             for uid in target_ids:
                 if not s.query(Enrollment).filter_by(user_id=uid,course_id=cid,campaign_id=c.id).first():s.add(Enrollment(user_id=uid,course_id=cid,campaign_id=c.id))
+    audit(s,request,user_for(request,s),"campaign.created","campaign",c.id,f"Cursos={len(course_ids)}; perfis={','.join(roles)}")
     s.commit();s.close();return RedirectResponse("/campaigns",303)
 @app.get("/campaigns/{campaign_id}/edit",response_class=HTMLResponse)
 def campaign_edit_page(campaign_id:int,request:Request):
@@ -319,6 +354,7 @@ def campaign_edit(campaign_id:int,request:Request,title:str=Form(...),descriptio
         if s.get(Course,cid):s.add(CampaignCourse(campaign_id=c.id,course_id=cid))
     for role in set(roles):
         if role in ("colaborador","gestor","rh","admin"):s.add(CampaignRole(campaign_id=c.id,role=role))
+    audit(s,request,user_for(request,s),"campaign.updated","campaign",c.id,f"Cursos={len(course_ids)}; perfis={','.join(set(roles))}")
     s.commit();s.close();return RedirectResponse("/campaigns",303)
 @app.get("/learn/{cid}",response_class=HTMLResponse)
 def learn(cid:int,request:Request):
@@ -340,6 +376,28 @@ def update_progress(cid:int,request:Request,progress:int=Form(...)):
     if not e:s.close();raise HTTPException(403)
     if progress<1 or progress>99:s.close();raise HTTPException(400,"Progresso deve estar entre 1 e 99.")
     e.progress=max(e.progress,progress);e.started_at=e.started_at or datetime.utcnow();e.last_activity=datetime.utcnow();e.status="Em andamento";s.commit();s.close();return RedirectResponse(f"/learn/{cid}",303)
+@app.post("/api/learning/events")
+async def learning_event(request:Request):
+    s=db();u=require(request,s)
+    try: payload=await request.json()
+    except Exception: s.close();raise HTTPException(400,"Evento inválido.")
+    try: cid=int(payload.get("course_id")); position=max(0,int(payload.get("position_seconds",0))); delta=max(0,min(30,int(payload.get("delta_seconds",0))))
+    except (TypeError,ValueError): s.close();raise HTTPException(400,"Dados de tracking inválidos.")
+    event_type=str(payload.get("event_type","heartbeat"))[:40]
+    if event_type not in {"play","pause","heartbeat","ended","seek","visibility_hidden"}: s.close();raise HTTPException(400,"Tipo de evento inválido.")
+    e=s.query(Enrollment).filter_by(user_id=u.id,course_id=cid).first()
+    c=s.get(Course,cid)
+    if not e or not c: s.close();raise HTTPException(403,"Matrícula não encontrada.")
+    now=datetime.utcnow();e.started_at=e.started_at or now;e.last_activity=now;e.status="Em andamento"
+    if event_type=="heartbeat": e.watched_seconds=min(e.watched_seconds+delta,max(c.duration_minutes*60*2,60))
+    s.add(LearningEvent(enrollment_id=e.id,user_id=u.id,course_id=cid,event_type=event_type,position_seconds=position,delta_seconds=delta))
+    if c.duration_minutes>0:
+        e.progress=max(e.progress,min(99,int(e.watched_seconds/(c.duration_minutes*60)*100)))
+    if event_type=="ended" and c.duration_minutes>0 and e.watched_seconds >= int(c.duration_minutes*60*0.9):
+        e.progress=100;e.status="Concluído";e.completed_at=now
+        if not s.query(Certificate).filter_by(user_id=u.id,course_id=cid).first(): s.add(Certificate(code=secrets.token_hex(6).upper(),user_id=u.id,course_id=cid))
+    s.commit();result={"progress":e.progress,"watched_seconds":e.watched_seconds,"status":e.status};s.close();return result
+
 @app.post("/learn/{cid}/complete")
 def complete(cid:int,request:Request):
     s=db();u=require(request,s);e=s.query(Enrollment).filter_by(user_id=u.id,course_id=cid).first()
@@ -365,12 +423,12 @@ def reports(request:Request):
     s.close();return render("reports.html",user=u,rows=rows,total=total,done=done,pending=pending,pct=round(done*100/total) if total else 0)
 @app.get("/reports.csv")
 def report_csv(request:Request):
-    s=db();require(request,s,["admin","rh"]);out=io.StringIO();w=csv.writer(out,delimiter=";");w.writerow(["Nome","Email","Departamento","Grupos","Treinamento","Progresso (%)","Status","Iniciado em","Última atividade","Concluído","Atribuído em","Concluído em","Campanha"])
+    s=db();require(request,s,["admin","rh"]);out=io.StringIO();w=csv.writer(out,delimiter=";");w.writerow(["Nome","Email","Departamento","Grupos","Treinamento","Progresso (%)","Status","Iniciado em","Última atividade","Segundos assistidos","Concluído","Atribuído em","Concluído em","Campanha"])
     for e in s.query(Enrollment).filter(Enrollment.started_at.isnot(None)).order_by(Enrollment.started_at.desc()).all():
         usr=s.get(User,e.user_id);c=s.get(Course,e.course_id);campaign=s.get(Campaign,e.campaign_id) if e.campaign_id else None
         if usr and c:
             groups=", ".join(g.name for g in s.query(UserGroup).join(GroupMember,GroupMember.group_id==UserGroup.id).filter(GroupMember.user_id==usr.id).all())
-            w.writerow([usr.name,usr.email,usr.department,groups,c.title,e.progress,e.status,e.started_at.strftime("%d/%m/%Y %H:%M") if e.started_at else "",e.last_activity.strftime("%d/%m/%Y %H:%M") if e.last_activity else "","Sim" if e.status=="Concluído" else "Não",e.enrolled_at.strftime("%d/%m/%Y %H:%M"),e.completed_at.strftime("%d/%m/%Y %H:%M") if e.completed_at else "",campaign.title if campaign else ""])
+            w.writerow([usr.name,usr.email,usr.department,groups,c.title,e.progress,e.status,e.started_at.strftime("%d/%m/%Y %H:%M") if e.started_at else "",e.last_activity.strftime("%d/%m/%Y %H:%M") if e.last_activity else "",e.watched_seconds,"Sim" if e.status=="Concluído" else "Não",e.enrolled_at.strftime("%d/%m/%Y %H:%M"),e.completed_at.strftime("%d/%m/%Y %H:%M") if e.completed_at else "",campaign.title if campaign else ""])
     s.close();return StreamingResponse(iter(["\ufeff"+out.getvalue()]),media_type="text/csv; charset=utf-8",headers={"Content-Disposition":"attachment; filename=relatorio_gertec_academy.csv"})
 
 MODULES={"dashboard":"Painel inicial","courses":"Cursos","campaigns":"Campanhas","reports":"Relatórios","users":"Usuários","forum":"Fórum","certificates":"Certificados"}
@@ -444,6 +502,13 @@ def forum_reply(pid:int,request:Request,body:str=Form(...)):
     s=db();u=require(request,s);parent=s.get(ForumPost,pid)
     if not parent:s.close();raise HTTPException(404)
     s.add(ForumPost(user_id=u.id,parent_id=pid,body=body.strip()));s.commit();s.close();return RedirectResponse("/forum",303)
+
+@app.get("/admin/audit",response_class=HTMLResponse)
+def audit_page(request:Request):
+    s=db();actor=require(request,s,["admin"])
+    logs=s.query(AuditLog).order_by(AuditLog.created_at.desc()).limit(300).all()
+    items=[(x,s.get(User,x.actor_user_id) if x.actor_user_id else None) for x in logs]
+    result=render("audit.html",user=actor,items=items);s.close();return result
 
 @app.get("/admin/sync-users")
 async def sync_users(request:Request):

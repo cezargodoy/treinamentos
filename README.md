@@ -79,3 +79,16 @@ A interface usa a paleta institucional baseada na marca Gertec: azul-marinho/azu
 
 ## Segurança
 Nunca comite client secrets, strings de conexão ou `SECRET_KEY` no GitHub. Configure-os somente em Render > Environment. Não use dados reais de colaboradores até concluir revisão de segurança e privacidade.
+
+## Autenticação: login padrão e Microsoft Entra ID opcional
+
+A tela `/login` oferece dois caminhos independentes:
+
+- **Login padrão:** e-mail e senha cadastrados pelo administrador/RH. Senhas são armazenadas com PBKDF2-HMAC-SHA256 e salt individual.
+- **Entrar com Microsoft (SSO):** aparece somente quando `ENTRA_TENANT_ID`, `ENTRA_CLIENT_ID` e `ENTRA_CLIENT_SECRET` estão configurados. Para iniciar sem integração, basta deixar essas variáveis vazias; o login padrão continua funcionando.
+
+No primeiro acesso, se ainda não existir nenhum usuário, use `/setup` para criar a primeira conta administradora (senha mínima de 12 caracteres). Depois, entre em **Usuários** para cadastrar colaboradores, RH e outros administradores. O RH e o administrador podem criar contas locais.
+
+Quando o SSO for habilitado futuramente, um colaborador local poderá usar o mesmo e-mail no botão Microsoft. O sistema vincula a identidade Entra ID à conta existente e preserva o perfil local atribuído. Configure a Redirect URI `https://SEU-DOMINIO/auth/callback` no App Registration.
+
+**Atenção para produção:** habilite HTTPS e `COOKIE_SECURE=true`, configure `SECRET_KEY` forte, implemente política de recuperação/troca de senha, MFA conforme política corporativa, rate limiting, CSRF e auditoria antes de uso amplo. O cadastro inicial `/setup` fica automaticamente bloqueado depois que a primeira conta é criada.

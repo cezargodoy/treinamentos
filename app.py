@@ -1,4 +1,4 @@
-import os, csv, io, secrets
+import os, csv, io, secrets, hashlib, hmac
 from datetime import datetime, date
 from urllib.parse import quote
 import httpx
@@ -27,6 +27,7 @@ class User(Base):
     department:Mapped[str]=mapped_column(String(160),default="")
     role:Mapped[str]=mapped_column(String(30),default="learner")
     active:Mapped[bool]=mapped_column(Boolean,default=True)
+    password_hash:Mapped[str|None]=mapped_column(String(300),nullable=True)
     last_login:Mapped[datetime]=mapped_column(DateTime,default=datetime.utcnow)
 class Course(Base):
     __tablename__="courses"
@@ -69,6 +70,11 @@ class Certificate(Base):
     course_id:Mapped[int]=mapped_column(ForeignKey("courses.id"))
     issued_at:Mapped[datetime]=mapped_column(DateTime,default=datetime.utcnow)
 Base.metadata.create_all(engine)
+# Compatibilidade com bancos criados por versões anteriores do MVP.
+from sqlalchemy import inspect, text
+if "password_hash" not in [c["name"] for c in inspect(engine).get_columns("users")]:
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE users ADD COLUMN password_hash VARCHAR(300)"))
 
 app=FastAPI(title="Gertec Academy")
 app.add_middleware(SessionMiddleware,secret_key=os.getenv("SECRET_KEY","development-only-change-me"),same_site="lax",https_only=os.getenv("COOKIE_SECURE","false").lower()=="true",max_age=43200)
@@ -91,18 +97,66 @@ def user_for(request,s):
     return s.get(User,uid) if uid else None
 def require(request,s,roles=None):
     u=user_for(request,s)
-    if not u or not u.active: raise HTTPException(401,"Autentique-se com sua conta Microsoft 365.")
+    if not u or not u.active: raise HTTPException(401,"Faça login para continuar.")
     if roles and u.role not in roles: raise HTTPException(403,"Acesso não autorizado.")
     return u
 def render(name,**ctx):
     return HTMLResponse(templates.get_template(name).render(**ctx))
 @app.get("/health")
 def health(): return {"status":"ok"}
-@app.get("/login")
-async def login(request:Request):
-    if not oauth.create_client("entra"): return render("setup.html",message="O login Microsoft Entra ainda não foi configurado. Preencha as variáveis de ambiente indicadas no README.")
+def password_digest(password: str) -> str:
+    salt=secrets.token_bytes(16)
+    digest=hashlib.pbkdf2_hmac("sha256",password.encode(),salt,310000)
+    return salt.hex()+":"+digest.hex()
+def password_matches(password: str, stored: str|None) -> bool:
+    if not stored or ":" not in stored: return False
+    salt_hex,digest_hex=stored.split(":",1)
+    try: expected=bytes.fromhex(digest_hex)
+    except ValueError: return False
+    actual=hashlib.pbkdf2_hmac("sha256",password.encode(),bytes.fromhex(salt_hex),310000)
+    return hmac.compare_digest(actual,expected)
+@app.get("/login",response_class=HTMLResponse)
+def login_page(request:Request):
+    s=db();current=user_for(request,s);has_users=s.query(User).count()>0;s.close()
+    if current: return RedirectResponse("/",303)
+    return render("login.html",message=None,entra_enabled=bool(oauth.create_client("entra")),has_users=has_users)
+@app.post("/login",response_class=HTMLResponse)
+def password_login(request:Request,email:str=Form(...),password:str=Form(...)):
+    s=db();u=s.query(User).filter(func.lower(User.email)==email.strip().lower()).first()
+    if not u or not u.active or not password_matches(password,u.password_hash):
+        s.close();return render("login.html",message="E-mail ou senha inválidos.",entra_enabled=bool(oauth.create_client("entra")),has_users=True)
+    u.last_login=datetime.utcnow();s.commit();request.session.clear();request.session["user_id"]=u.id;s.close()
+    return RedirectResponse("/",303)
+@app.get("/login/entra")
+async def entra_login(request:Request):
+    if not oauth.create_client("entra"):
+        return render("login.html",message="O acesso Microsoft ainda não está habilitado. Utilize o login padrão.",entra_enabled=False,has_users=True)
     redirect=os.getenv("ENTRA_REDIRECT_URI",str(request.url_for("auth_callback")))
     return await oauth.entra.authorize_redirect(request,redirect)
+@app.get("/setup",response_class=HTMLResponse)
+def first_admin_page():
+    s=db();empty=s.query(User).count()==0;s.close()
+    if not empty: raise HTTPException(404)
+    return render("setup.html",message=None)
+@app.post("/setup")
+def create_first_admin(request:Request,name:str=Form(...),email:str=Form(...),password:str=Form(...)):
+    s=db()
+    if s.query(User).count()!=0: s.close();raise HTTPException(403,"A configuração inicial já foi concluída.")
+    if len(password)<12: s.close();return render("setup.html",message="A senha deve ter pelo menos 12 caracteres.")
+    email=email.strip().lower();u=User(entra_oid="local:"+email,name=name.strip(),email=email,role="admin",password_hash=password_digest(password),last_login=datetime.utcnow())
+    s.add(u);s.commit();request.session["user_id"]=u.id;s.close();return RedirectResponse("/",303)
+@app.get("/admin/users",response_class=HTMLResponse)
+def manage_users(request:Request):
+    s=db();u=require(request,s,["admin","rh"]);users=s.query(User).order_by(User.name).all();s.close()
+    return render("users.html",user=u,users=users)
+@app.post("/admin/users")
+def create_user(request:Request,name:str=Form(...),email:str=Form(...),department:str=Form(""),role:str=Form("colaborador"),password:str=Form(...)):
+    s=db();require(request,s,["admin","rh"]);email=email.strip().lower()
+    if role not in ("admin","rh","colaborador") or len(password)<12 or s.query(User).filter(func.lower(User.email)==email).first():
+        users=s.query(User).order_by(User.name).all();actor=user_for(request,s);s.close()
+        return render("users.html",user=actor,users=users,message="Verifique os dados: e-mail não cadastrado, perfil válido e senha com pelo menos 12 caracteres.")
+    s.add(User(entra_oid="local:"+email,name=name.strip(),email=email,department=department.strip(),role=role,password_hash=password_digest(password),last_login=datetime.utcnow()))
+    s.commit();s.close();return RedirectResponse("/admin/users",303)
 @app.get("/auth/callback",name="auth_callback")
 async def auth_callback(request:Request):
     if not oauth.create_client("entra"): raise HTTPException(503,"Entra ID não configurado")
@@ -114,15 +168,17 @@ async def auth_callback(request:Request):
     if not email or not oid: raise HTTPException(400,"A Microsoft não retornou e-mail/identificador.")
     s=db()
     u=s.query(User).filter_by(entra_oid=oid).first()
-    if not u: u=User(entra_oid=oid,name=name,email=email,role=role_for(email));s.add(u)
+    if not u: u=s.query(User).filter(func.lower(User.email)==email).first()
+    if not u:
+        u=User(entra_oid=oid,name=name,email=email,role=role_for(email));s.add(u)
     else:
-        u.name=name;u.email=email;u.role=role_for(email);u.active=True;u.last_login=datetime.utcnow()
+        u.entra_oid=oid;u.name=name;u.email=email;u.active=True;u.last_login=datetime.utcnow()
     s.commit();request.session["user_id"]=u.id;s.close()
     return RedirectResponse("/",303)
 @app.get("/logout")
 def logout(request:Request):
     request.session.clear()
-    return RedirectResponse("https://login.microsoftonline.com/common/oauth2/v2.0/logout",303)
+    return RedirectResponse("/login",303)
 @app.get("/",response_class=HTMLResponse)
 def home(request:Request):
     s=db();u=user_for(request,s)

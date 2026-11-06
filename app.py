@@ -606,7 +606,7 @@ def certificate_pdf(certificate_id:int,request:Request):
     # Logo oficial fornecido, recortado para remover margens brancas
     logo_path=os.path.join("static","gertec-logo-oficial.png")
     if os.path.exists(logo_path):
-        try: pdf.drawImage(ImageReader(logo_path),page_w-72*mm,page_h-31*mm,width=60*mm,height=25*mm,preserveAspectRatio=True,anchor='c',mask='auto')
+        try: pdf.drawImage(ImageReader(logo_path),page_w-63*mm,page_h-29*mm,width=51*mm,height=21.25*mm,preserveAspectRatio=True,anchor='c',mask='auto')
         except Exception: pass
     # Marca Gertec Academy no canto superior esquerdo
     pdf.setFillColor(colors.white);pdf.roundRect(14*mm,page_h-25*mm,11*mm,11*mm,2*mm,fill=1,stroke=0)

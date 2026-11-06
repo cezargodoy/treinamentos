@@ -1,0 +1,13 @@
+{% extends "base.html" %}{% block content %}
+<div class="heading"><div><span class="eyebrow">RELACIONAMENTO COM COLABORADORES</span><h1>Comunicações e notificações</h1><p>Envie orientações e lembretes de campanhas por e-mail.</p></div></div>
+
+<section class="card"><h2>Novo comunicado de treinamento</h2><form method="post" action="/admin/communications/send" class="form">
+<label>Campanha<select name="campaign_id" required>{% for c in campaigns %}<option value="{{c.id}}">{{c.title}}{% if c.due_date %} — prazo {{c.due_date}}{% endif %}</option>{% endfor %}</select></label>
+<label>Destinatários<select name="audience"><option value="campaign">Participantes matriculados na campanha</option>{% for g in groups %}<option value="{{g.id}}">Grupo: {{g.name}}</option>{% endfor %}</select></label>
+<label class="full">Assunto do e-mail<input name="subject" required maxlength="300" placeholder="Ação necessária: conclua seu treinamento"></label>
+<label>Prazo para realização<input type="date" name="due_date"></label>
+<label class="full">Mensagem<textarea name="message" rows="7" required placeholder="Olá, {{nome}}! Você foi inscrito(a) na campanha {{campanha}}. Prazo: {{prazo}}."></textarea><small class="secret-hint">Variáveis disponíveis: {{'{{nome}}'}}, {{'{{campanha}}'}}, {{'{{prazo}}'}}.</small></label>
+<div class="full"><button class="btn">Enviar e-mail aos destinatários</button></div>
+</form></section>
+<section class="card"><h2>Histórico recente de envios</h2><div style="overflow-x:auto"><table class="log-table"><thead><tr><th>Data</th><th>Destinatário</th><th>Assunto</th><th>Status</th></tr></thead><tbody>{% for x in logs %}<tr><td>{{x.sent_at.strftime('%d/%m/%Y %H:%M')}}</td><td>{{x.recipient}}</td><td>{{x.subject}}</td><td>{{'Enviado' if x.status=='sent' else 'Falhou'}}</td></tr>{% else %}<tr><td colspan="4">Nenhum envio registrado.</td></tr>{% endfor %}</tbody></table></div></section>
+{% endblock %}

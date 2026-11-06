@@ -1,4 +1,5 @@
-import os, csv, io, secrets, hashlib, hmac, re
+import os, csv, io, secrets, hashlib, hmac, re, smtplib, ssl
+from email.message import EmailMessage
 from datetime import datetime, date, timezone
 from zoneinfo import ZoneInfo
 from urllib.parse import quote
@@ -10,6 +11,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from authlib.integrations.starlette_client import OAuth
 from sqlalchemy import create_engine, String, Integer, Boolean, DateTime, ForeignKey, Text, func, UniqueConstraint, LargeBinary
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
+from cryptography.fernet import Fernet, InvalidToken
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 APP_ENV=os.getenv("APP_ENV","development").lower()
@@ -168,6 +170,22 @@ class Certificate(Base):
     course_id:Mapped[int]=mapped_column(ForeignKey("courses.id"))
     campaign_id:Mapped[int|None]=mapped_column(ForeignKey("campaigns.id"),nullable=True,index=True)
     issued_at:Mapped[datetime]=mapped_column(DateTime,default=datetime.utcnow)
+
+class AppSetting(Base):
+    __tablename__="app_settings"
+    key:Mapped[str]=mapped_column(String(100),primary_key=True)
+    value:Mapped[str]=mapped_column(Text,default="")
+    updated_at:Mapped[datetime]=mapped_column(DateTime,default=datetime.utcnow)
+class EmailLog(Base):
+    __tablename__="email_logs"
+    id:Mapped[int]=mapped_column(primary_key=True)
+    campaign_id:Mapped[int|None]=mapped_column(ForeignKey("campaigns.id"),nullable=True)
+    recipient:Mapped[str]=mapped_column(String(240))
+    subject:Mapped[str]=mapped_column(String(300))
+    status:Mapped[str]=mapped_column(String(30),default="sent")
+    detail:Mapped[str]=mapped_column(Text,default="")
+    sent_at:Mapped[datetime]=mapped_column(DateTime,default=datetime.utcnow)
+
 Base.metadata.create_all(engine)
 # Compatibilidade com bancos criados por versões anteriores do MVP.
 from sqlalchemy import inspect, text
@@ -198,7 +216,7 @@ with engine.begin() as conn:
     if "last_activity" not in cols: conn.execute(text("ALTER TABLE enrollments ADD COLUMN last_activity TIMESTAMP NULL"))
     if "watched_seconds" not in cols: conn.execute(text("ALTER TABLE enrollments ADD COLUMN watched_seconds INTEGER NOT NULL DEFAULT 0"))
 
-app=FastAPI(title="Gertec Academy", version="4.0.0")
+app=FastAPI(title="Gertec Academy", version="4.1.0")
 app.add_middleware(SessionMiddleware,secret_key=os.getenv("SECRET_KEY","development-only-change-me"),same_site="lax",https_only=os.getenv("COOKIE_SECURE","false").lower()=="true",max_age=43200)
 os.makedirs("static/uploads",exist_ok=True)
 app.mount("/static",StaticFiles(directory="static"),name="static")
@@ -209,6 +227,36 @@ client_id=os.getenv("ENTRA_CLIENT_ID","")
 client_secret=os.getenv("ENTRA_CLIENT_SECRET","")
 if tenant and client_id and client_secret:
     oauth.register(name="entra",client_id=client_id,client_secret=client_secret,server_metadata_url=f"https://login.microsoftonline.com/{tenant}/v2.0/.well-known/openid-configuration",client_kwargs={"scope":"openid profile email User.Read"})
+
+def _fernet():
+    key=__import__("base64").urlsafe_b64encode(hashlib.sha256(os.getenv("SECRET_KEY","development-only-change-me").encode()).digest())
+    return Fernet(key)
+def get_setting(key, default=""):
+    s=db()
+    try:
+        row=s.get(AppSetting,key)
+        if not row:return default
+        try:return _fernet().decrypt(row.value.encode()).decode()
+        except (InvalidToken,ValueError):return default
+    finally:s.close()
+def set_setting(s,key,value):
+    token=_fernet().encrypt((value or "").encode()).decode()
+    row=s.get(AppSetting,key)
+    if not row:s.add(AppSetting(key=key,value=token))
+    else:row.value=token;row.updated_at=datetime.utcnow()
+def entra_client():
+    tid=get_setting("entra_tenant",os.getenv("ENTRA_TENANT_ID",""))
+    cid=get_setting("entra_client_id",os.getenv("ENTRA_CLIENT_ID",""))
+    secret=get_setting("entra_client_secret",os.getenv("ENTRA_CLIENT_SECRET",""))
+    if tid and cid and secret:
+        name="entra_dynamic"
+        if not oauth.create_client(name):
+            oauth.register(name=name,client_id=cid,client_secret=secret,
+                server_metadata_url=f"https://login.microsoftonline.com/{tid}/v2.0/.well-known/openid-configuration",
+                client_kwargs={"scope":"openid profile email User.Read"})
+        return oauth.create_client(name)
+    return oauth.create_client("entra")
+
 def db(): return SessionLocal()
 def role_for(email):
     e=email.lower()
@@ -229,6 +277,7 @@ def require(request,s,roles=None):
         if perm and not perm.enabled: raise HTTPException(403,"Seu perfil não possui acesso a este módulo.")
     return u
 def render(name,**ctx):
+    ctx.setdefault("app_language", get_setting("language","pt-BR"))
     return HTMLResponse(templates.get_template(name).render(**ctx))
 def audit(s, request, actor, action, entity_type, entity_id="", details=""):
     ip=request.client.host if request.client else ""
@@ -250,20 +299,21 @@ def password_matches(password: str, stored: str|None) -> bool:
 def login_page(request:Request):
     s=db();current=user_for(request,s);has_users=s.query(User).count()>0;s.close()
     if current: return RedirectResponse("/",303)
-    return render("login.html",message=None,entra_enabled=bool(oauth.create_client("entra")),has_users=has_users)
+    return render("login.html",message=None,entra_enabled=bool(entra_client()),has_users=has_users)
 @app.post("/login",response_class=HTMLResponse)
 def password_login(request:Request,email:str=Form(...),password:str=Form(...)):
     s=db();u=s.query(User).filter(func.lower(User.email)==email.strip().lower()).first()
     if not u or not u.active or not password_matches(password,u.password_hash):
-        s.close();return render("login.html",message="E-mail ou senha inválidos.",entra_enabled=bool(oauth.create_client("entra")),has_users=True)
+        s.close();return render("login.html",message="E-mail ou senha inválidos.",entra_enabled=bool(entra_client()),has_users=True)
     u.last_login=datetime.utcnow();s.commit();request.session.clear();request.session["user_id"]=u.id;s.close()
     return RedirectResponse("/",303)
 @app.get("/login/entra")
 async def entra_login(request:Request):
-    if not oauth.create_client("entra"):
+    client=entra_client()
+    if not client:
         return render("login.html",message="O acesso Microsoft ainda não está habilitado. Utilize o login padrão.",entra_enabled=False,has_users=True)
     redirect=os.getenv("ENTRA_REDIRECT_URI",str(request.url_for("auth_callback")))
-    return await oauth.entra.authorize_redirect(request,redirect)
+    return await client.authorize_redirect(request,redirect)
 @app.get("/setup",response_class=HTMLResponse)
 def first_admin_page():
     s=db();empty=s.query(User).count()==0;s.close()
@@ -310,9 +360,10 @@ def learner_mode(request:Request,enabled:str=Form("")):
     s=db();u=require(request,s,["admin"]);request.session["learner_view"]=(enabled=="on");s.close();return RedirectResponse("/",303)
 @app.get("/auth/callback",name="auth_callback")
 async def auth_callback(request:Request):
-    if not oauth.create_client("entra"): raise HTTPException(503,"Entra ID não configurado")
-    token=await oauth.entra.authorize_access_token(request)
-    info=token.get("userinfo") or await oauth.entra.parse_id_token(request,token)
+    entra=entra_client()
+    if not entra: raise HTTPException(503,"Microsoft Entra ID não está configurado.")
+    token=await entra.authorize_access_token(request)
+    info=token.get("userinfo") or await entra.parse_id_token(request,token)
     email=(info.get("preferred_username") or info.get("email") or "").lower()
     oid=info.get("oid") or info.get("sub")
     name=info.get("name") or email
@@ -589,12 +640,22 @@ def certificate_pdf(certificate_id:int,request:Request):
     from reportlab.lib.units import mm
     from reportlab.pdfgen import canvas
     from reportlab.lib.utils import ImageReader
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
     from reportlab.graphics.barcode.qr import QrCodeWidget
     from reportlab.graphics.shapes import Drawing
     from reportlab.graphics import renderPDF
     from xml.sax.saxutils import escape
     buf=io.BytesIO(); page_w,page_h=landscape(A4)
     pdf=canvas.Canvas(buf,pagesize=landscape(A4),pageCompression=1)
+    signature_font="Times-Italic"
+    script_font_path=os.path.join("static","fonts","GertecSignature.ttf")
+    if os.path.exists(script_font_path):
+        try:
+            pdfmetrics.registerFont(TTFont("GertecSignature",script_font_path))
+            signature_font="GertecSignature"
+        except Exception:
+            pass
     navy=colors.HexColor("#082B5C"); blue=colors.HexColor("#174F91"); gold=colors.HexColor("#D6A928"); ink=colors.HexColor("#14243B"); muted=colors.HexColor("#536477"); pale=colors.HexColor("#F4F7FB")
     # Fundo e moldura executiva
     pdf.setFillColor(colors.white);pdf.rect(0,0,page_w,page_h,fill=1,stroke=0)
@@ -651,10 +712,10 @@ def certificate_pdf(certificate_id:int,request:Request):
     pdf.setFillColor(muted);pdf.setFont("Helvetica",6.5);pdf.drawString(page_w-66*mm,line_y-20*mm,"ou consulte pelo código acima")
     # Única área de assinatura: Diretoria de Recursos Humanos
     sig_y=22*mm;sig_x=page_w*0.30
-    # Identificação nominal em tipografia elegante; a assinatura manuscrita
-    # deve ser inserida somente com autorização expressa da pessoa indicada.
+    # Nome em fonte caligráfica decorativa. Não representa assinatura autógrafa
+    # nem autenticação pessoal; a aprovação formal cabe à Diretoria de RH.
     pdf.saveState()
-    pdf.setFillColor(navy);pdf.setFont("Times-Italic",22)
+    pdf.setFillColor(navy);pdf.setFont(signature_font,25)
     pdf.drawCentredString(sig_x,sig_y+17*mm,"Edinalva Janjacomo")
     pdf.setStrokeColor(colors.HexColor("#8794A5"));pdf.setLineWidth(.7)
     pdf.line(sig_x-42*mm,sig_y+11*mm,sig_x+42*mm,sig_y+11*mm)
@@ -777,7 +838,9 @@ def audit_page(request:Request):
 @app.get("/admin/sync-users")
 async def sync_users(request:Request):
     s=db();require(request,s,["admin"]);s.close()
-    tid=os.getenv("GRAPH_TENANT_ID") or tenant;cid=os.getenv("GRAPH_CLIENT_ID") or client_id;secret=os.getenv("GRAPH_CLIENT_SECRET") or client_secret
+    tid=get_setting("entra_tenant",os.getenv("GRAPH_TENANT_ID") or tenant)
+    cid=get_setting("entra_client_id",os.getenv("GRAPH_CLIENT_ID") or client_id)
+    secret=get_setting("entra_client_secret",os.getenv("GRAPH_CLIENT_SECRET") or client_secret)
     if not all([tid,cid,secret]): raise HTTPException(503,"Configure GRAPH_TENANT_ID, GRAPH_CLIENT_ID e GRAPH_CLIENT_SECRET.")
     async with httpx.AsyncClient(timeout=30) as client:
         tok=await client.post(f"https://login.microsoftonline.com/{tid}/oauth2/v2.0/token",data={"client_id":cid,"client_secret":secret,"scope":"https://graph.microsoft.com/.default","grant_type":"client_credentials"})
@@ -793,9 +856,102 @@ async def sync_users(request:Request):
         email=(x.get("mail") or x.get("userPrincipalName") or "").lower()
         if not email:continue
         u=s.query(User).filter_by(entra_oid=x["id"]).first()
-        if not u:u=User(entra_oid=x["id"],name=x.get("displayName") or email,email=email,department=x.get("department") or "",role=role_for(email));s.add(u);count+=1
-        else:u.name=x.get("displayName") or u.name;u.email=email;u.department=x.get("department") or "";u.active=bool(x.get("accountEnabled",True));u.role=role_for(email)
+        if not u:u=s.query(User).filter(func.lower(User.email)==email).first()
+        if not u:
+            u=User(entra_oid=x["id"],name=x.get("displayName") or email,email=email,department=x.get("department") or "",role=role_for(email));s.add(u);count+=1
+        else:
+            u.entra_oid=x["id"];u.name=x.get("displayName") or u.name;u.email=email
+            u.department=x.get("department") or "";u.active=bool(x.get("accountEnabled",True));u.role=role_for(email)
     s.commit();s.close();return {"imported_or_updated":count,"directory_users_received":len(data),"note":"Sincronização paginada do Microsoft Graph; limite de segurança de 10.000 usuários por execução."}
+
+@app.get("/admin/settings",response_class=HTMLResponse)
+def admin_settings(request:Request):
+    s=db();actor=require(request,s,["admin"])
+    def val(k):
+        row=s.get(AppSetting,k)
+        if not row:return ""
+        try:return _fernet().decrypt(row.value.encode()).decode()
+        except Exception:return ""
+    context={"user":actor,"tenant":val("entra_tenant"),"client_id":val("entra_client_id"),
+             "has_client_secret":bool(val("entra_client_secret")),"language":val("language") or "pt-BR",
+             "smtp_host":val("smtp_host"),"smtp_port":val("smtp_port") or "587",
+             "smtp_user":val("smtp_user"),"has_smtp_password":bool(val("smtp_password")),
+             "smtp_from":val("smtp_from") or val("smtp_user")}
+    s.close()
+    return render("settings.html",**context)
+
+@app.post("/admin/settings")
+def save_admin_settings(request:Request,language:str=Form("pt-BR"),entra_tenant:str=Form(""),
+        entra_client_id:str=Form(""),entra_client_secret:str=Form(""),smtp_host:str=Form(""),
+        smtp_port:str=Form("587"),smtp_user:str=Form(""),smtp_password:str=Form(""),smtp_from:str=Form("")):
+    s=db();actor=require(request,s,["admin"])
+    values={"language":language,"entra_tenant":entra_tenant.strip(),"entra_client_id":entra_client_id.strip(),
+            "smtp_host":smtp_host.strip(),"smtp_port":smtp_port.strip(),"smtp_user":smtp_user.strip(),"smtp_from":smtp_from.strip()}
+    for k,v in values.items():set_setting(s,k,v)
+    if entra_client_secret.strip():set_setting(s,"entra_client_secret",entra_client_secret.strip())
+    if smtp_password.strip():set_setting(s,"smtp_password",smtp_password.strip())
+    audit(s,request,actor,"settings.updated","settings","global","Configurações gerais atualizadas")
+    s.commit();s.close()
+    return RedirectResponse("/admin/settings?saved=1",303)
+
+@app.post("/admin/settings/test-email")
+def test_email(request:Request,to_email:str=Form(...)):
+    s=db();actor=require(request,s,["admin"]);s.close()
+    host=get_setting("smtp_host");port=int(get_setting("smtp_port","587") or 587)
+    username=get_setting("smtp_user");password=get_setting("smtp_password");sender=get_setting("smtp_from") or username
+    if not all([host,username,password,sender]):raise HTTPException(400,"Configure servidor SMTP, usuário, senha e remetente.")
+    msg=EmailMessage();msg["Subject"]="Teste de comunicação — Gertec Academy";msg["From"]=sender;msg["To"]=to_email
+    msg.set_content("Este é um e-mail de teste da plataforma Gertec Academy.")
+    try:
+        with smtplib.SMTP(host,port,timeout=20) as server:
+            server.starttls(context=ssl.create_default_context());server.login(username,password);server.send_message(msg)
+    except Exception as exc:raise HTTPException(502,f"Falha no envio SMTP: {str(exc)[:250]}")
+    return RedirectResponse("/admin/settings?email_test=sent",303)
+
+@app.get("/admin/communications",response_class=HTMLResponse)
+def communications_page(request:Request):
+    s=db();actor=require(request,s,["admin","rh"])
+    campaigns=s.query(Campaign).order_by(Campaign.created_at.desc()).all()
+    groups=s.query(UserGroup).order_by(UserGroup.name).all()
+    logs=s.query(EmailLog).order_by(EmailLog.sent_at.desc()).limit(100).all()
+    users=s.query(User).filter_by(active=True).order_by(User.name).all()
+    result=render("communications.html",user=actor,campaigns=campaigns,groups=groups,logs=logs,users=users)
+    s.close();return result
+
+@app.post("/admin/communications/send")
+def send_campaign_email(request:Request,campaign_id:int=Form(...),subject:str=Form(...),
+        message:str=Form(...),due_date:str=Form(""),audience:str=Form("campaign")):
+    s=db();actor=require(request,s,["admin","rh"]);campaign=s.get(Campaign,campaign_id)
+    if not campaign:s.close();raise HTTPException(404,"Campanha não encontrada.")
+    if audience=="campaign":
+        ids={e.user_id for e in s.query(Enrollment).filter_by(campaign_id=campaign_id).all()}
+    else:
+        ids={m.user_id for m in s.query(GroupMember).filter_by(group_id=int(audience)).all()}
+    recipients=s.query(User).filter(User.id.in_(ids),User.active==True).all() if ids else []
+    host=get_setting("smtp_host");port=int(get_setting("smtp_port","587") or 587)
+    username=get_setting("smtp_user");password=get_setting("smtp_password");sender=get_setting("smtp_from") or username
+    if not all([host,username,password,sender]):
+        s.close();raise HTTPException(400,"Configure o SMTP em Configurações gerais antes de enviar.")
+    sent=0;failed=0
+    try:
+        with smtplib.SMTP(host,port,timeout=25) as server:
+            server.starttls(context=ssl.create_default_context());server.login(username,password)
+            for recipient in recipients:
+                personalized=message.replace("{{nome}}",recipient.name).replace("{{campanha}}",campaign.title).replace("{{prazo}}",due_date or campaign.due_date or "Não informado")
+                msg=EmailMessage();msg["Subject"]=subject;msg["From"]=sender;msg["To"]=recipient.email
+                msg.set_content(personalized)
+                try:
+                    server.send_message(msg);s.add(EmailLog(campaign_id=campaign.id,recipient=recipient.email,subject=subject,status="sent"))
+                    sent+=1
+                except Exception as exc:
+                    s.add(EmailLog(campaign_id=campaign.id,recipient=recipient.email,subject=subject,status="failed",detail=str(exc)[:500]));failed+=1
+        audit(s,request,actor,"campaign.email_sent","campaign",campaign.id,f"Enviados={sent}; falhas={failed}")
+        s.commit()
+    except Exception:
+        s.rollback();s.close();raise HTTPException(502,"Falha na conexão SMTP. Verifique as configurações.")
+    s.close()
+    return RedirectResponse(f"/admin/communications?sent={sent}&failed={failed}",303)
+
 def issue_campaign_certificate_if_complete(s, user_id:int, campaign_id:int):
     campaign=s.get(Campaign,campaign_id)
     enrollments=s.query(Enrollment).filter_by(user_id=user_id,campaign_id=campaign_id).all()

@@ -642,6 +642,7 @@ def certificate_pdf(certificate_id:int,request:Request):
     from reportlab.lib.utils import ImageReader
     from reportlab.pdfbase import pdfmetrics
     from reportlab.pdfbase.ttfonts import TTFont
+    from reportlab.pdfbase.pdfmetrics import EmbeddedType1Face, Font
     from reportlab.graphics.barcode.qr import QrCodeWidget
     from reportlab.graphics.shapes import Drawing
     from reportlab.graphics import renderPDF
@@ -649,13 +650,30 @@ def certificate_pdf(certificate_id:int,request:Request):
     buf=io.BytesIO(); page_w,page_h=landscape(A4)
     pdf=canvas.Canvas(buf,pagesize=landscape(A4),pageCompression=1)
     signature_font="Times-Italic"
-    script_font_path=os.path.join("static","fonts","GertecSignature.ttf")
-    if os.path.exists(script_font_path):
+    # Great Vibes é a tipografia solicitada para a identificação visual do RH.
+    # O arquivo é obtido no build a partir do repositório oficial Google Fonts
+    # e incorporado ao PDF pelo ReportLab.
+    great_vibes_path=os.path.join("static","fonts","GreatVibes-Regular.ttf")
+    if os.path.exists(great_vibes_path):
         try:
-            pdfmetrics.registerFont(TTFont("GertecSignature",script_font_path))
-            signature_font="GertecSignature"
-        except Exception:
-            pass
+            if "GreatVibes" not in pdfmetrics.getRegisteredFontNames():
+                pdfmetrics.registerFont(TTFont("GreatVibes", great_vibes_path))
+            signature_font="GreatVibes"
+        except Exception as exc:
+            print(f"Não foi possível carregar Great Vibes: {exc}")
+    # Fallback apenas para ambientes locais sem a fonte; em produção o Dockerfile
+    # baixa Great Vibes durante a construção da imagem.
+    if signature_font == "Times-Italic":
+        signature_afm=os.path.join("static","fonts","GertecSignature.afm")
+        signature_pfb=os.path.join("static","fonts","GertecSignature.pfb")
+        if os.path.exists(signature_afm) and os.path.exists(signature_pfb):
+            try:
+                face=EmbeddedType1Face(signature_afm,signature_pfb)
+                pdfmetrics.registerTypeFace(face)
+                pdfmetrics.registerFont(Font("GertecSignature",face.name,"WinAnsiEncoding"))
+                signature_font="GertecSignature"
+            except Exception as exc:
+                print(f"Não foi possível carregar a fonte caligráfica alternativa: {exc}")
     navy=colors.HexColor("#082B5C"); blue=colors.HexColor("#174F91"); gold=colors.HexColor("#D6A928"); ink=colors.HexColor("#14243B"); muted=colors.HexColor("#536477"); pale=colors.HexColor("#F4F7FB")
     # Fundo e moldura executiva
     pdf.setFillColor(colors.white);pdf.rect(0,0,page_w,page_h,fill=1,stroke=0)

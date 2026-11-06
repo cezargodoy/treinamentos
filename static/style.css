@@ -18,3 +18,24 @@
 .secret-hint{font-size:12px;color:var(--muted);margin-top:5px}
 .log-table{width:100%;border-collapse:collapse}.log-table th,.log-table td{padding:10px;border-bottom:1px solid var(--line);text-align:left;font-size:12px}
 @media(max-width:850px){.settings-grid{grid-template-columns:1fr}.sidebar{width:220px}.main{margin-left:220px}}
+
+/* Correção v4.1.1 — navegação lateral com rolagem sem alterar a identidade visual */
+.sidebar{height:100vh;min-height:0;overflow:hidden;display:flex;flex-direction:column;padding:26px 18px 16px}
+.sidebar>.brand{flex:0 0 auto;margin:0 5px 30px}
+.sidebar>.nav-scroll{display:flex;flex:1 1 auto;flex-direction:column;min-height:0;overflow-y:auto;overflow-x:hidden;padding:0 5px 12px 0;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:#b8c7d8 #f3f6fa}
+.sidebar>.nav-scroll::-webkit-scrollbar{width:8px}
+.sidebar>.nav-scroll::-webkit-scrollbar-track{background:#f3f6fa;border-radius:8px}
+.sidebar>.nav-scroll::-webkit-scrollbar-thumb{background:#b8c7d8;border-radius:8px}
+.sidebar>.nav-scroll::-webkit-scrollbar-thumb:hover{background:#8298b2}
+.sidebar>.nav-scroll>.navtitle{flex:0 0 auto;margin:0 12px 12px}
+.sidebar>.nav-scroll>a{display:block;flex:0 0 auto;padding:13px 12px;text-decoration:none;color:#536174;border-radius:8px;font-weight:600;line-height:1.35}
+.sidebar>.nav-scroll>a:hover{background:#edf5fa;color:var(--blue)}
+.sidebar>.profile{flex:0 0 auto;margin-top:12px;background:#fff}
+@media(max-width:600px){
+ .sidebar{position:relative;inset:auto;width:100%;height:auto;max-height:none;padding:16px}
+ .sidebar>.brand{margin:0 5px 16px}
+ .sidebar>.nav-scroll{flex:0 1 auto;max-height:42vh;min-height:0;padding-right:5px}
+ .sidebar>.nav-scroll>a,.sidebar>.nav-scroll>.navtitle{display:block}
+ .sidebar>.profile{margin-top:12px}
+ .main{margin:0}
+}

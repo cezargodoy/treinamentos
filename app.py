@@ -64,6 +64,7 @@ class Campaign(Base):
     description:Mapped[str]=mapped_column(Text,default="")
     due_date:Mapped[str]=mapped_column(String(10),default="")
     active:Mapped[bool]=mapped_column(Boolean,default=True)
+    duration_hours:Mapped[int]=mapped_column(Integer,default=1)
     created_at:Mapped[datetime]=mapped_column(DateTime,default=datetime.utcnow)
 class CampaignRole(Base):
     __tablename__="campaign_roles"
@@ -164,6 +165,7 @@ class Certificate(Base):
     code:Mapped[str]=mapped_column(String(40),unique=True)
     user_id:Mapped[int]=mapped_column(ForeignKey("users.id"))
     course_id:Mapped[int]=mapped_column(ForeignKey("courses.id"))
+    campaign_id:Mapped[int|None]=mapped_column(ForeignKey("campaigns.id"),nullable=True,index=True)
     issued_at:Mapped[datetime]=mapped_column(DateTime,default=datetime.utcnow)
 Base.metadata.create_all(engine)
 # Compatibilidade com bancos criados por versões anteriores do MVP.
@@ -174,6 +176,10 @@ if "password_hash" not in [c["name"] for c in inspect(engine).get_columns("users
 
 # Migrações aditivas para bancos já utilizados no MVP.
 with engine.begin() as conn:
+    campaign_cols={c["name"] for c in inspect(engine).get_columns("campaigns")}
+    if "duration_hours" not in campaign_cols: conn.execute(text("ALTER TABLE campaigns ADD COLUMN duration_hours INTEGER NOT NULL DEFAULT 1"))
+    cert_cols={c["name"] for c in inspect(engine).get_columns("certificates")}
+    if "campaign_id" not in cert_cols: conn.execute(text("ALTER TABLE certificates ADD COLUMN campaign_id INTEGER NULL REFERENCES campaigns(id)"))
     cols={c["name"] for c in inspect(engine).get_columns("users")}
     if "photo_path" not in cols: conn.execute(text("ALTER TABLE users ADD COLUMN photo_path VARCHAR(500) DEFAULT ''"))
     if "bio" not in cols: conn.execute(text("ALTER TABLE users ADD COLUMN bio TEXT DEFAULT ''"))
@@ -384,8 +390,8 @@ def campaigns(request:Request):
         data.append((c,avg,len(es),sum(1 for e in es if e.status=="Concluído")))
     result=render("campaigns.html",user=u,campaigns=data,courses=courses,groups=groups,users=users,roles=["colaborador","gestor","rh","admin"]);s.close();return result
 @app.post("/campaigns")
-def add_campaign(request:Request,title:str=Form(...),description:str=Form(""),due_date:str=Form(""),course_ids:list[int]=Form([]),group_ids:list[int]=Form([]),roles:list[str]=Form([])):
-    s=db();require(request,s,["admin"]);c=Campaign(title=title,description=description,due_date=due_date);s.add(c);s.flush()
+def add_campaign(request:Request,title:str=Form(...),description:str=Form(""),due_date:str=Form(""),duration_hours:int=Form(1),course_ids:list[int]=Form([]),group_ids:list[int]=Form([]),roles:list[str]=Form([])):
+    s=db();require(request,s,["admin"]);c=Campaign(title=title,description=description,due_date=due_date,duration_hours=max(1,min(1000,duration_hours)));s.add(c);s.flush()
     valid_roles={"colaborador","gestor","rh","admin"};roles=[r for r in roles if r in valid_roles]
     for role in roles:s.add(CampaignRole(campaign_id=c.id,role=role))
     for cid in course_ids:
@@ -406,10 +412,10 @@ def campaign_edit_page(campaign_id:int,request:Request):
     if not c:s.close();raise HTTPException(404)
     result=render("campaign_edit.html",user=actor,campaign=c,courses=s.query(Course).all(),selected_courses=[x.course_id for x in s.query(CampaignCourse).filter_by(campaign_id=c.id)],selected_roles=[x.role for x in s.query(CampaignRole).filter_by(campaign_id=c.id)],roles=["colaborador","gestor","rh","admin"]);s.close();return result
 @app.post("/campaigns/{campaign_id}/edit")
-def campaign_edit(campaign_id:int,request:Request,title:str=Form(...),description:str=Form(""),due_date:str=Form(""),active:str=Form(""),course_ids:list[int]=Form([]),roles:list[str]=Form([])):
+def campaign_edit(campaign_id:int,request:Request,title:str=Form(...),description:str=Form(""),due_date:str=Form(""),duration_hours:int=Form(1),active:str=Form(""),course_ids:list[int]=Form([]),roles:list[str]=Form([])):
     s=db();require(request,s,["admin"]);c=s.get(Campaign,campaign_id)
     if not c:s.close();raise HTTPException(404)
-    c.title=title;c.description=description;c.due_date=due_date;c.active=(active=="on")
+    c.title=title;c.description=description;c.due_date=due_date;c.duration_hours=max(1,min(1000,duration_hours));c.active=(active=="on")
     s.query(CampaignCourse).filter_by(campaign_id=c.id).delete();s.query(CampaignRole).filter_by(campaign_id=c.id).delete()
     for cid in course_ids:
         if s.get(Course,cid):s.add(CampaignCourse(campaign_id=c.id,course_id=cid))
@@ -469,7 +475,8 @@ async def learning_event(request:Request):
         e.progress=max(e.progress,min(99,int(e.watched_seconds/(c.duration_minutes*60)*100)))
     if event_type=="ended" and c.duration_minutes>0 and e.watched_seconds >= int(c.duration_minutes*60*0.9):
         e.progress=100;e.status="Concluído";e.completed_at=now
-        if not s.query(Certificate).filter_by(user_id=u.id,course_id=cid).first(): s.add(Certificate(code=secrets.token_hex(6).upper(),user_id=u.id,course_id=cid))
+        if not s.query(Certificate).filter_by(user_id=u.id,course_id=cid,campaign_id=None).first(): s.add(Certificate(code="GAC-"+secrets.token_hex(6).upper(),user_id=u.id,course_id=cid))
+        if e.campaign_id: issue_campaign_certificate_if_complete(s,u.id,e.campaign_id)
     s.commit();result={"progress":e.progress,"watched_seconds":e.watched_seconds,"status":e.status};s.close();return result
 
 @app.post("/learn/{cid}/complete")
@@ -478,7 +485,8 @@ def complete(cid:int,request:Request):
     if not e:s.close();raise HTTPException(403)
     e.progress=100;e.status="Concluído";e.completed_at=datetime.utcnow();e.started_at=e.started_at or e.enrolled_at;e.last_activity=datetime.utcnow()
     cert=s.query(Certificate).filter_by(user_id=u.id,course_id=cid).first()
-    if not cert:s.add(Certificate(code=secrets.token_hex(6).upper(),user_id=u.id,course_id=cid))
+    if not cert:s.add(Certificate(code="GAC-"+secrets.token_hex(6).upper(),user_id=u.id,course_id=cid))
+    if e.campaign_id: issue_campaign_certificate_if_complete(s,u.id,e.campaign_id)
     s.commit();s.close();return RedirectResponse("/certificates",303)
 @app.post("/courses/{cid}/assessment")
 def save_assessment(cid:int,request:Request,title:str=Form("Avaliação"),passing_score:int=Form(70),max_attempts:int=Form(2),question:list[str]=Form([]),answer:list[str]=Form([]),publish:str=Form("")):
@@ -511,14 +519,112 @@ def submit_assessment(cid:int,request:Request,answers:list[str]=Form([])):
     s.add(AssessmentAttempt(assessment_id=a.id,user_id=u.id,score=score,passed=passed))
     if passed:
         enrollment.progress=max(enrollment.progress,100);enrollment.status="Concluído";enrollment.completed_at=datetime.utcnow();enrollment.last_activity=datetime.utcnow()
-        if not s.query(Certificate).filter_by(user_id=u.id,course_id=cid).first():s.add(Certificate(code=secrets.token_hex(6).upper(),user_id=u.id,course_id=cid))
+        if not s.query(Certificate).filter_by(user_id=u.id,course_id=cid,campaign_id=None).first():s.add(Certificate(code="GAC-"+secrets.token_hex(6).upper(),user_id=u.id,course_id=cid))
+        if enrollment.campaign_id: issue_campaign_certificate_if_complete(s,u.id,enrollment.campaign_id)
     s.commit();s.close();return RedirectResponse(f"/learn/{cid}?assessment_score={score}&passed={1 if passed else 0}",303)
 @app.get("/certificates",response_class=HTMLResponse)
 def certificates(request:Request):
     s=db();u=require(request,s);q=s.query(Certificate)
     if u.role=="colaborador":q=q.filter_by(user_id=u.id)
-    items=[(c,s.get(User,c.user_id),s.get(Course,c.course_id)) for c in q.all()];s.close()
-    return render("certificates.html",user=u,items=items)
+    items=[]
+    for cert in q.order_by(Certificate.issued_at.desc()).all():
+        usr=s.get(User,cert.user_id); course=s.get(Course,cert.course_id); campaign=s.get(Campaign,cert.campaign_id) if cert.campaign_id else None
+        items.append((cert,usr,campaign.title if campaign else (course.title if course else "Treinamento"),campaign.duration_hours if campaign else max(1,round((course.duration_minutes if course else 60)/60))))
+    result=render("certificates.html",user=u,items=items);s.close();return result
+
+@app.get("/certificates/validate/{code}", response_class=HTMLResponse)
+def validate_certificate(code:str):
+    """Validação pública por código; não expõe dados pessoais além do certificado."""
+    s=db()
+    try:
+        cert=s.query(Certificate).filter_by(code=code).first()
+        if not cert:
+            return HTMLResponse("<h1>Certificado não encontrado</h1><p>Verifique o código informado.</p>", status_code=404)
+        recipient=s.get(User,cert.user_id)
+        course=s.get(Course,cert.course_id)
+        campaign=s.get(Campaign,cert.campaign_id) if cert.campaign_id else None
+        title=campaign.title if campaign else (course.title if course else "Treinamento")
+        hours=campaign.duration_hours if campaign else max(1,round((course.duration_minutes if course else 60)/60))
+        name=recipient.name if recipient else "Colaborador"
+        issued=cert.issued_at.strftime('%d/%m/%Y') if cert.issued_at else "—"
+        return HTMLResponse(f"""<!doctype html><html lang="pt-br"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Validação de certificado</title><body style="margin:0;background:#f3f6fa;font:16px Arial;color:#102a43"><main style="max-width:760px;margin:8vh auto;background:white;padding:42px;border:1px solid #dbe3ed;border-top:8px solid #0b2d5c;border-radius:12px"><div style="color:#b38a32;font-weight:bold;letter-spacing:2px">GERTEC ACADEMY</div><h1 style="margin-bottom:8px">Certificado válido</h1><p>Este documento consta como emitido pela Universidade Corporativa Gertec.</p><hr style="border:0;border-top:1px solid #e2e8f0"><p><b>Colaborador:</b> {name}</p><p><b>Programa:</b> {title}</p><p><b>Carga horária:</b> {hours} hora(s)</p><p><b>Data de emissão:</b> {issued}</p><p><b>Código:</b> {cert.code}</p></main></body></html>""")
+    finally:
+        s.close()
+
+@app.get("/certificates/{certificate_id}/pdf")
+def certificate_pdf(certificate_id:int,request:Request):
+    s=db();u=require(request,s);cert=s.get(Certificate,certificate_id)
+    if not cert or (u.role=="colaborador" and cert.user_id!=u.id): s.close();raise HTTPException(404)
+    recipient=s.get(User,cert.user_id);course=s.get(Course,cert.course_id);campaign=s.get(Campaign,cert.campaign_id) if cert.campaign_id else None
+    title=campaign.title if campaign else (course.title if course else "Treinamento")
+    hours=campaign.duration_hours if campaign else max(1,round((course.duration_minutes if course else 60)/60))
+    issued=cert.issued_at;code=cert.code;full_name=recipient.name if recipient else "Colaborador"
+    s.close()
+    from reportlab.lib.pagesizes import landscape, A4
+    from reportlab.lib import colors
+    from reportlab.lib.units import mm
+    from reportlab.pdfgen import canvas
+    from reportlab.lib.utils import ImageReader
+    from reportlab.graphics.barcode.qr import QrCodeWidget
+    from reportlab.graphics.shapes import Drawing
+    from reportlab.graphics import renderPDF
+    from xml.sax.saxutils import escape
+    buf=io.BytesIO(); page_w,page_h=landscape(A4)
+    pdf=canvas.Canvas(buf,pagesize=landscape(A4),pageCompression=1)
+    navy=colors.HexColor("#082B5C"); blue=colors.HexColor("#174F91"); gold=colors.HexColor("#D6A928"); ink=colors.HexColor("#14243B"); muted=colors.HexColor("#536477"); pale=colors.HexColor("#F4F7FB")
+    # Fundo e moldura executiva
+    pdf.setFillColor(colors.white);pdf.rect(0,0,page_w,page_h,fill=1,stroke=0)
+    pdf.setFillColor(pale);pdf.circle(page_w+4*mm,page_h/2,62*mm,fill=1,stroke=0)
+    pdf.setFillColor(colors.HexColor("#EAF0F8"));pdf.circle(page_w+4*mm,page_h/2,43*mm,fill=1,stroke=0)
+    pdf.setFillColor(navy);path=pdf.beginPath();path.moveTo(0,page_h);path.lineTo(0,page_h-35*mm);path.curveTo(40*mm,page_h-17*mm,75*mm,page_h-7*mm,112*mm,page_h);path.close();pdf.drawPath(path,fill=1,stroke=0)
+    pdf.setStrokeColor(gold);pdf.setLineWidth(1.6);pdf.rect(7*mm,7*mm,page_w-14*mm,page_h-14*mm,fill=0,stroke=1)
+    pdf.setStrokeColor(colors.HexColor("#E8D49A"));pdf.setLineWidth(.5);pdf.rect(9*mm,9*mm,page_w-18*mm,page_h-18*mm,fill=0,stroke=1)
+    # Logo oficial fornecido, recortado para remover margens brancas
+    logo_path=os.path.join("static","gertec-logo-oficial.png")
+    if os.path.exists(logo_path):
+        try: pdf.drawImage(ImageReader(logo_path),page_w-57*mm,page_h-29*mm,width=45*mm,height=19*mm,preserveAspectRatio=True,anchor='c',mask='auto')
+        except Exception: pass
+    pdf.setFillColor(colors.white);pdf.setFont("Helvetica-Bold",12);pdf.drawString(17*mm,page_h-14*mm,"GERTEC ACADEMY")
+    pdf.setFillColor(colors.HexColor("#DCE7F5"));pdf.setFont("Helvetica",6.5);pdf.drawString(17*mm,page_h-19*mm,"UNIVERSIDADE CORPORATIVA")
+    # Cabeçalho central
+    center=page_w/2
+    pdf.setFillColor(gold);pdf.setFont("Helvetica-Bold",10);pdf.drawCentredString(center,page_h-37*mm,"RECONHECIMENTO DE APRENDIZAGEM")
+    pdf.setFillColor(navy);pdf.setFont("Times-Bold",31);pdf.drawCentredString(center,page_h-51*mm,"CERTIFICADO")
+    pdf.setFillColor(ink);pdf.setFont("Helvetica",11);pdf.drawCentredString(center,page_h-59*mm,"DE CONCLUSÃO")
+    pdf.setStrokeColor(gold);pdf.setLineWidth(1);pdf.line(center-32*mm,page_h-62*mm,center+32*mm,page_h-62*mm)
+    pdf.setFillColor(muted);pdf.setFont("Helvetica",11);pdf.drawCentredString(center,page_h-73*mm,"Certificamos que")
+    pdf.setFillColor(navy);pdf.setFont("Helvetica-Bold",23 if len(full_name)<32 else 18);pdf.drawCentredString(center,page_h-85*mm,full_name[:90])
+    pdf.setFillColor(muted);pdf.setFont("Helvetica",10.5);pdf.drawCentredString(center,page_h-94*mm,"concluiu com êxito o programa de aprendizagem")
+    pdf.setFillColor(navy);pdf.setFont("Helvetica-Bold",15 if len(title)<58 else 12);pdf.drawCentredString(center,page_h-104*mm,title[:110])
+    # Carga horária destacada
+    pill_w=53*mm; pill_y=page_h-119*mm
+    pdf.setStrokeColor(gold);pdf.setLineWidth(1.3);pdf.roundRect(center-pill_w/2,pill_y,pill_w,10*mm,3*mm,fill=0,stroke=1)
+    pdf.setFillColor(ink);pdf.setFont("Helvetica-Bold",12);pdf.drawCentredString(center,pill_y+3.3*mm,f"CARGA HORÁRIA  ·  {hours} HORAS")
+    # Metadados
+    line_y=page_h-132*mm;pdf.setStrokeColor(gold);pdf.setLineWidth(.6);pdf.line(25*mm,line_y,page_w-25*mm,line_y)
+    col1=55*mm;col2=center;col3=page_w-55*mm
+    pdf.setFillColor(muted);pdf.setFont("Helvetica",8);pdf.drawCentredString(col1,line_y-7*mm,"DATA DE EMISSÃO")
+    pdf.setFillColor(navy);pdf.setFont("Helvetica-Bold",10);pdf.drawCentredString(col1,line_y-12*mm,issued.strftime('%d/%m/%Y') if issued else "—")
+    pdf.setFillColor(muted);pdf.setFont("Helvetica",8);pdf.drawCentredString(col2,line_y-7*mm,"CÓDIGO DO CERTIFICADO")
+    pdf.setFillColor(navy);pdf.setFont("Helvetica-Bold",10);pdf.drawCentredString(col2,line_y-12*mm,code)
+    # QR Code real para validação pública
+    validation_url=str(request.base_url).rstrip('/')+f"/certificates/validate/{code}"
+    qr=QrCodeWidget(validation_url);bounds=qr.getBounds();qr_size=21*mm
+    drawing=Drawing(qr_size,qr_size,transform=[qr_size/(bounds[2]-bounds[0]),0,0,qr_size/(bounds[3]-bounds[1]),0,0]);drawing.add(qr)
+    renderPDF.draw(drawing,pdf,page_w-91*mm,line_y-23*mm)
+    pdf.setFillColor(muted);pdf.setFont("Helvetica",7.5);pdf.drawString(page_w-66*mm,line_y-10*mm,"VALIDAÇÃO DIGITAL")
+    pdf.setFillColor(blue);pdf.setFont("Helvetica-Bold",7);pdf.drawString(page_w-66*mm,line_y-15*mm,"Aponte a câmera para o QR Code")
+    pdf.setFillColor(muted);pdf.setFont("Helvetica",6.5);pdf.drawString(page_w-66*mm,line_y-20*mm,"ou consulte pelo código acima")
+    # Única área de assinatura: Diretoria de Recursos Humanos
+    sig_y=22*mm;sig_x=page_w*0.30
+    pdf.setStrokeColor(colors.HexColor("#8794A5"));pdf.setLineWidth(.7);pdf.line(sig_x-42*mm,sig_y+13*mm,sig_x+42*mm,sig_y+13*mm)
+    pdf.setFillColor(navy);pdf.setFont("Helvetica-Bold",10);pdf.drawCentredString(sig_x,sig_y+7*mm,"Diretoria de Recursos Humanos")
+    pdf.setFillColor(muted);pdf.setFont("Helvetica",8);pdf.drawCentredString(sig_x,sig_y+2*mm,"Gertec do Brasil")
+    
+    pdf.setFillColor(muted);pdf.setFont("Helvetica",6);pdf.drawCentredString(center,10*mm,f"Documento eletrônico · Código {code} · Gertec Academy")
+    pdf.showPage();pdf.save();buf.seek(0)
+    return StreamingResponse(buf,media_type="application/pdf",headers={"Content-Disposition":f'attachment; filename="certificado-{code}.pdf"'})
+
 @app.get("/reports",response_class=HTMLResponse)
 def reports(request:Request):
     s=db();u=require(request,s,["admin","rh"]);rows=[]
@@ -647,3 +753,14 @@ async def sync_users(request:Request):
         if not u:u=User(entra_oid=x["id"],name=x.get("displayName") or email,email=email,department=x.get("department") or "",role=role_for(email));s.add(u);count+=1
         else:u.name=x.get("displayName") or u.name;u.email=email;u.department=x.get("department") or "";u.active=bool(x.get("accountEnabled",True));u.role=role_for(email)
     s.commit();s.close();return {"imported_or_updated":count,"directory_users_received":len(data),"note":"Sincronização paginada do Microsoft Graph; limite de segurança de 10.000 usuários por execução."}
+def issue_campaign_certificate_if_complete(s, user_id:int, campaign_id:int):
+    campaign=s.get(Campaign,campaign_id)
+    enrollments=s.query(Enrollment).filter_by(user_id=user_id,campaign_id=campaign_id).all()
+    if not campaign or not enrollments or any(e.status!="Concluído" for e in enrollments): return None
+    existing=s.query(Certificate).filter_by(user_id=user_id,campaign_id=campaign_id).first()
+    if existing: return existing
+    cert=Certificate(code="GAC-"+datetime.utcnow().strftime("%Y%m")+"-"+secrets.token_hex(4).upper(),user_id=user_id,course_id=enrollments[0].course_id,campaign_id=campaign_id)
+    s.add(cert)
+    return cert
+
+

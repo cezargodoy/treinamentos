@@ -600,7 +600,7 @@ def certificate_pdf(certificate_id:int,request:Request):
     pdf.setFillColor(colors.white);pdf.rect(0,0,page_w,page_h,fill=1,stroke=0)
     pdf.setFillColor(pale);pdf.circle(page_w+4*mm,page_h/2,62*mm,fill=1,stroke=0)
     pdf.setFillColor(colors.HexColor("#EAF0F8"));pdf.circle(page_w+4*mm,page_h/2,43*mm,fill=1,stroke=0)
-    pdf.setFillColor(navy);path=pdf.beginPath();path.moveTo(0,page_h);path.lineTo(0,page_h-43*mm);path.curveTo(52*mm,page_h-20*mm,105*mm,page_h-7*mm,150*mm,page_h);path.close();pdf.drawPath(path,fill=1,stroke=0)
+    pdf.setFillColor(navy);path=pdf.beginPath();path.moveTo(0,page_h);path.lineTo(0,page_h-55*mm);path.curveTo(58*mm,page_h-35*mm,112*mm,page_h-10*mm,178*mm,page_h);path.close();pdf.drawPath(path,fill=1,stroke=0)
     pdf.setStrokeColor(gold);pdf.setLineWidth(1.6);pdf.rect(7*mm,7*mm,page_w-14*mm,page_h-14*mm,fill=0,stroke=1)
     pdf.setStrokeColor(colors.HexColor("#E8D49A"));pdf.setLineWidth(.5);pdf.rect(9*mm,9*mm,page_w-18*mm,page_h-18*mm,fill=0,stroke=1)
     # Logo oficial fornecido, recortado para remover margens brancas
@@ -651,21 +651,18 @@ def certificate_pdf(certificate_id:int,request:Request):
     pdf.setFillColor(muted);pdf.setFont("Helvetica",6.5);pdf.drawString(page_w-66*mm,line_y-20*mm,"ou consulte pelo código acima")
     # Única área de assinatura: Diretoria de Recursos Humanos
     sig_y=22*mm;sig_x=page_w*0.30
-    # Assinatura caligráfica ilustrativa institucional (não representa pessoa física)
+    # Identificação nominal em tipografia elegante; a assinatura manuscrita
+    # deve ser inserida somente com autorização expressa da pessoa indicada.
     pdf.saveState()
-    pdf.setStrokeColor(navy);pdf.setLineWidth(1.45);pdf.setLineCap(1)
-    sign=pdf.beginPath()
-    sign.moveTo(sig_x-25*mm,sig_y+20*mm)
-    sign.curveTo(sig_x-20*mm,sig_y+31*mm,sig_x-18*mm,sig_y+8*mm,sig_x-11*mm,sig_y+20*mm)
-    sign.curveTo(sig_x-7*mm,sig_y+28*mm,sig_x-7*mm,sig_y+11*mm,sig_x-2*mm,sig_y+18*mm)
-    sign.curveTo(sig_x+3*mm,sig_y+27*mm,sig_x+2*mm,sig_y+10*mm,sig_x+9*mm,sig_y+19*mm)
-    sign.curveTo(sig_x+15*mm,sig_y+26*mm,sig_x+17*mm,sig_y+14*mm,sig_x+24*mm,sig_y+21*mm)
-    pdf.drawPath(sign,stroke=1,fill=0)
-    flourish=pdf.beginPath();flourish.moveTo(sig_x-28*mm,sig_y+17*mm);flourish.curveTo(sig_x-5*mm,sig_y+7*mm,sig_x+10*mm,sig_y+27*mm,sig_x+29*mm,sig_y+13*mm);pdf.drawPath(flourish,stroke=1,fill=0)
+    pdf.setFillColor(navy);pdf.setFont("Times-Italic",22)
+    pdf.drawCentredString(sig_x,sig_y+17*mm,"Edinalva Janjacomo")
+    pdf.setStrokeColor(colors.HexColor("#8794A5"));pdf.setLineWidth(.7)
+    pdf.line(sig_x-42*mm,sig_y+11*mm,sig_x+42*mm,sig_y+11*mm)
+    pdf.setFillColor(navy);pdf.setFont("Helvetica-Bold",10)
+    pdf.drawCentredString(sig_x,sig_y+5*mm,"Diretoria de Recursos Humanos")
+    pdf.setFillColor(muted);pdf.setFont("Helvetica",8)
+    pdf.drawCentredString(sig_x,sig_y,"Gertec do Brasil")
     pdf.restoreState()
-    pdf.setStrokeColor(colors.HexColor("#8794A5"));pdf.setLineWidth(.7);pdf.line(sig_x-42*mm,sig_y+11*mm,sig_x+42*mm,sig_y+11*mm)
-    pdf.setFillColor(navy);pdf.setFont("Helvetica-Bold",10);pdf.drawCentredString(sig_x,sig_y+5*mm,"Diretoria de Recursos Humanos")
-    pdf.setFillColor(muted);pdf.setFont("Helvetica",8);pdf.drawCentredString(sig_x,sig_y,"Gertec do Brasil")
     
     pdf.setFillColor(muted);pdf.setFont("Helvetica",6);pdf.drawCentredString(center,10*mm,f"Documento eletrônico · Código {code} · Gertec Academy")
     pdf.showPage();pdf.save();buf.seek(0)

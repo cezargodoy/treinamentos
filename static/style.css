@@ -39,3 +39,8 @@
  .sidebar>.profile{margin-top:12px}
  .main{margin:0}
 }
+
+/* Ações destrutivas — visíveis e consistentes com a identidade Gertec */
+.btn.danger{background:#fff0ef;color:#a52a24;border:1px solid #f2c5c1}
+.btn.danger:hover{background:#ffe2df;color:#84201b}
+.btn.small{padding:7px 10px;font-size:11px}

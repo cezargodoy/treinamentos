@@ -13,6 +13,10 @@ from sqlalchemy import create_engine, String, Integer, Boolean, DateTime, Foreig
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 from cryptography.fernet import Fernet, InvalidToken
 from jinja2 import Environment, FileSystemLoader, select_autoescape
+from reportlab.lib.pagesizes import A4, landscape
+from reportlab.lib import colors
+from reportlab.pdfgen import canvas
+from reportlab.lib.units import mm
 
 APP_ENV=os.getenv("APP_ENV","development").lower()
 DATABASE_URL=os.getenv("DATABASE_URL", "" if APP_ENV=="production" else "sqlite:///./gertec_academy.db")
@@ -422,9 +426,9 @@ def home(request:Request):
     s.close();return render("dashboard.html",**ctx)
 @app.get("/courses",response_class=HTMLResponse)
 def courses(request:Request):
-    s=db();u=require(request,s,["admin","rh"]);items=s.query(Course).order_by(Course.created_at.desc()).all();s.close()
+    s=db();u=require(request,s,["admin","rh"]);items=s.query(Course).order_by(Course.created_at.desc()).all()
     assessments={a.course_id:a for a in s.query(Assessment).all()}
-    return render("courses.html",user=u,courses=items,assessments=assessments)
+    result=render("courses.html",user=u,courses=items,assessments=assessments);s.close();return result
 @app.post("/courses")
 def add_course(request:Request,title:str=Form(...),description:str=Form(""),category:str=Form("Geral"),duration:int=Form(15),sharepoint_url:str=Form(""),available_from:str=Form(""),available_until:str=Form("")):
     s=db();require(request,s,["admin","rh"])
@@ -498,6 +502,36 @@ def campaign_edit(campaign_id:int,request:Request,title:str=Form(...),descriptio
         if role in ("colaborador","gestor","rh","admin"):s.add(CampaignRole(campaign_id=c.id,role=role))
     audit(s,request,user_for(request,s),"campaign.updated","campaign",c.id,f"Cursos={len(course_ids)}; perfis={','.join(set(roles))}")
     s.commit();s.close();return RedirectResponse("/campaigns",303)
+
+@app.post("/campaigns/{campaign_id}/delete")
+def campaign_delete(campaign_id:int,request:Request):
+    s=db();actor=require(request,s,["admin"]);c=s.get(Campaign,campaign_id)
+    if not c:s.close();raise HTTPException(404)
+    # Preserve learning history and certificates: detach enrollments/certificates before removing campaign links.
+    s.query(CampaignCourse).filter_by(campaign_id=c.id).delete(synchronize_session=False)
+    s.query(CampaignRole).filter_by(campaign_id=c.id).delete(synchronize_session=False)
+    s.query(Enrollment).filter_by(campaign_id=c.id).update({Enrollment.campaign_id:None},synchronize_session=False)
+    s.query(Certificate).filter_by(campaign_id=c.id).update({Certificate.campaign_id:None},synchronize_session=False)
+    audit(s,request,actor,"campaign.deleted","campaign",c.id,f"Campanha excluída: {c.title}; histórico de matrículas e certificados preservado sem vínculo com a campanha")
+    s.delete(c);s.commit();s.close();return RedirectResponse("/campaigns",303)
+
+@app.post("/courses/{course_id}/delete")
+def course_delete(course_id:int,request:Request):
+    s=db();actor=require(request,s,["admin"]);c=s.get(Course,course_id)
+    if not c:s.close();raise HTTPException(404)
+    enroll_count=s.query(Enrollment).filter_by(course_id=c.id).count()
+    campaign_count=s.query(CampaignCourse).filter_by(course_id=c.id).count()
+    cert_count=s.query(Certificate).filter_by(course_id=c.id).count()
+    if enroll_count or campaign_count or cert_count:
+        s.close();raise HTTPException(409,"Este conteúdo possui matrículas, campanhas ou certificados associados. Remova os vínculos ou preserve o conteúdo para manter o histórico.")
+    assessment=s.query(Assessment).filter_by(course_id=c.id).first()
+    if assessment:
+        s.query(AssessmentQuestion).filter_by(assessment_id=assessment.id).delete(synchronize_session=False)
+        s.query(AssessmentAttempt).filter_by(assessment_id=assessment.id).delete(synchronize_session=False)
+        s.delete(assessment)
+    audit(s,request,actor,"course.deleted","course",c.id,f"Conteúdo excluído: {c.title}")
+    s.delete(c);s.commit();s.close();return RedirectResponse("/courses",303)
+
 @app.get("/learn/{cid}",response_class=HTMLResponse)
 def learn(cid:int,request:Request):
     s=db();u=require(request,s);c=s.get(Course,cid)
@@ -747,15 +781,121 @@ def certificate_pdf(certificate_id:int,request:Request):
     pdf.showPage();pdf.save();buf.seek(0)
     return StreamingResponse(buf,media_type="application/pdf",headers={"Content-Disposition":f'attachment; filename="certificado-{code}.pdf"'})
 
+def collect_report_data(s, start_date="", end_date="", campaign_id="", department="", group_id=""):
+    rows=[]
+    q=s.query(Enrollment).order_by(Enrollment.enrolled_at.desc())
+    if campaign_id:
+        try:q=q.filter(Enrollment.campaign_id==int(campaign_id))
+        except ValueError:pass
+    for e in q.all():
+        usr=s.get(User,e.user_id);course=s.get(Course,e.course_id)
+        if not usr or not course:continue
+        if department and usr.department!=department:continue
+        if group_id:
+            try:
+                member=s.query(GroupMember).filter_by(user_id=usr.id,group_id=int(group_id)).first()
+                if not member:continue
+            except ValueError:pass
+        if start_date:
+            try:
+                if e.enrolled_at.date()<date.fromisoformat(start_date):continue
+            except ValueError:pass
+        if end_date:
+            try:
+                if e.enrolled_at.date()>date.fromisoformat(end_date):continue
+            except ValueError:pass
+        campaign=s.get(Campaign,e.campaign_id) if e.campaign_id else None
+        rows.append((e,usr,course,campaign))
+    total=len(rows);done=sum(1 for e,_,_,_ in rows if e.status=="Concluído");pending=total-done
+    departments={}
+    for e,u,c,cam in rows:
+        key=u.department or "Não informado";d=departments.setdefault(key,[0,0]);d[0]+=1;d[1]+=1 if e.status=="Concluído" else 0
+    course_counts={}
+    for e,u,c,cam in rows:course_counts[c.title]=course_counts.get(c.title,0)+1
+    monthly={}
+    for e,u,c,cam in rows:
+        dt=e.completed_at or e.enrolled_at;key=dt.strftime("%m/%Y");monthly[key]=monthly.get(key,0)+(1 if e.status=="Concluído" else 0)
+    watched=sum(max(0,int(e.watched_seconds or 0)) for e,_,_,_ in rows)
+    return {"rows":rows,"total":total,"done":done,"pending":pending,"pct":round(done*100/total) if total else 0,
+            "departments":sorted(departments.items(),key=lambda x:x[0]),"top_courses":sorted(course_counts.items(),key=lambda x:x[1],reverse=True)[:8],
+            "monthly":sorted(monthly.items(),key=lambda x:datetime.strptime(x[0],"%m/%Y")),"watched_hours":round(watched/3600,1)}
+
 @app.get("/reports",response_class=HTMLResponse)
-def reports(request:Request):
-    s=db();u=require(request,s,["admin","rh"]);rows=[]
-    enrollments=s.query(Enrollment).order_by(Enrollment.enrolled_at.desc()).all()
-    for e in enrollments:
-        usr=s.get(User,e.user_id);c=s.get(Course,e.course_id)
-        if usr and c: rows.append((e,usr,c))
-    total=len(rows);done=sum(1 for e,_,_ in rows if e.status=="Concluído");pending=total-done
-    s.close();return render("reports.html",user=u,rows=rows,total=total,done=done,pending=pending,pct=round(done*100/total) if total else 0)
+def reports(request:Request,start_date:str="",end_date:str="",campaign_id:str="",department:str="",group_id:str=""):
+    s=db();u=require(request,s,["admin","rh"]);data=collect_report_data(s,start_date,end_date,campaign_id,department,group_id)
+    campaigns=s.query(Campaign).order_by(Campaign.title).all();departments=[x[0] for x in s.query(User.department).filter(User.department!="").distinct().all() if x[0]];groups=s.query(UserGroup).order_by(UserGroup.name).all()
+    result=render("reports.html",user=u,**data,campaigns=campaigns,departments=departments,groups=groups,filters={"start_date":start_date,"end_date":end_date,"campaign_id":campaign_id,"department":department,"group_id":group_id})
+    s.close();return result
+
+@app.get("/reports.pdf")
+def report_pdf(request:Request,start_date:str="",end_date:str="",campaign_id:str="",department:str="",group_id:str=""):
+    s=db();actor=require(request,s,["admin","rh"]);data=collect_report_data(s,start_date,end_date,campaign_id,department,group_id)
+    campaign_name="Todas as campanhas"
+    if campaign_id:
+        try:
+            obj=s.get(Campaign,int(campaign_id));campaign_name=obj.title if obj else "Campanha não encontrada"
+        except ValueError:pass
+    buf=io.BytesIO();page=landscape(A4);w,h=page
+    pdf=canvas.Canvas(buf,pagesize=page)
+    navy=colors.HexColor("#082B5C");blue=colors.HexColor("#1E5AA6");gold=colors.HexColor("#D6A928");pale=colors.HexColor("#EEF3F9");muted=colors.HexColor("#60738B")
+    pdf.setFillColor(navy);pdf.rect(0,h-35*mm,w,35*mm,fill=1,stroke=0)
+    pdf.setFillColor(colors.white);pdf.setFont("Helvetica-Bold",20);pdf.drawString(18*mm,h-17*mm,"GERTEC ACADEMY")
+    pdf.setFont("Helvetica",9);pdf.drawString(18*mm,h-24*mm,"RELATÓRIO EXECUTIVO DE TREINAMENTOS")
+    pdf.setFillColor(gold);pdf.rect(18*mm,h-36*mm,w-36*mm,1.2*mm,fill=1,stroke=0)
+    pdf.setFillColor(navy);pdf.setFont("Helvetica-Bold",15);pdf.drawString(18*mm,h-48*mm,"Dashboard de aprendizagem")
+    pdf.setFillColor(muted);pdf.setFont("Helvetica",8)
+    period=f"Período: {start_date or 'início'} a {end_date or 'atual'}  |  {campaign_name}"
+    if department:period+=f"  |  Departamento: {department}"
+    if group_id:
+        try:
+            grp=s.get(UserGroup,int(group_id));period+=f"  |  Grupo: {grp.name if grp else group_id}"
+        except ValueError:pass
+    pdf.drawString(18*mm,h-54*mm,period[:150])
+    cards=[("MATRÍCULAS",str(data['total'])),("CONCLUÍDOS",str(data['done'])),("PENDENTES",str(data['pending'])),("TAXA DE CONCLUSÃO",f"{data['pct']}%"),("HORAS ASSISTIDAS",str(data['watched_hours']))]
+    card_y=h-83*mm;card_w=(w-36*mm-8*mm)/5
+    for i,(label,value) in enumerate(cards):
+        x=18*mm+i*(card_w+2*mm);pdf.setFillColor(pale);pdf.roundRect(x,card_y,card_w,20*mm,3*mm,fill=1,stroke=0)
+        pdf.setFillColor(muted);pdf.setFont("Helvetica-Bold",7);pdf.drawString(x+4*mm,card_y+13*mm,label)
+        pdf.setFillColor(navy);pdf.setFont("Helvetica-Bold",17);pdf.drawString(x+4*mm,card_y+5*mm,value)
+    # Department completion bars
+    y0=card_y-13*mm;pdf.setFillColor(navy);pdf.setFont("Helvetica-Bold",10);pdf.drawString(18*mm,y0,"Conclusões por departamento")
+    y=y0-9*mm
+    for name,(count,completed) in data['departments'][:8]:
+        if y<24*mm:break
+        label=(name[:26]+"…") if len(name)>27 else name
+        pdf.setFillColor(muted);pdf.setFont("Helvetica",8);pdf.drawString(18*mm,y,label)
+        bx=65*mm;bw=95*mm;pdf.setFillColor(pale);pdf.roundRect(bx,y-1*mm,bw,4*mm,1.5*mm,fill=1,stroke=0)
+        ratio=completed/count if count else 0;pdf.setFillColor(blue);pdf.roundRect(bx,y-1*mm,bw*ratio,4*mm,1.5*mm,fill=1,stroke=0)
+        pdf.setFillColor(navy);pdf.drawRightString(166*mm,y,f"{completed}/{count}  ({round(ratio*100)}%)");y-=9*mm
+    # Most accessed content table
+    rx=183*mm;ry=y0;pdf.setFillColor(navy);pdf.setFont("Helvetica-Bold",10);pdf.drawString(rx,ry,"Conteúdos mais atribuídos")
+    ry-=9*mm
+    for name,count in data['top_courses']:
+        if ry<24*mm:break
+        pdf.setFillColor(muted);pdf.setFont("Helvetica",8);pdf.drawString(rx,ry,name[:38]);pdf.setFillColor(navy);pdf.drawRightString(w-18*mm,ry,str(count));ry-=8*mm
+    pdf.setStrokeColor(gold);pdf.line(18*mm,17*mm,w-18*mm,17*mm)
+    pdf.setFillColor(muted);pdf.setFont("Helvetica",7);pdf.drawString(18*mm,11*mm,f"Gerado em {datetime.now().strftime('%d/%m/%Y %H:%M')} · Gertec Academy · Uso interno")
+    pdf.showPage()
+    pdf.setFillColor(navy);pdf.rect(0,h-27*mm,w,27*mm,fill=1,stroke=0)
+    pdf.setFillColor(colors.white);pdf.setFont("Helvetica-Bold",15);pdf.drawString(18*mm,h-17*mm,"Detalhamento das matrículas")
+    pdf.setFillColor(muted);pdf.setFont("Helvetica",8);pdf.drawString(18*mm,h-34*mm,f"Registros encontrados: {data['total']} · Exibindo até 28 registros nesta página")
+    cols=[18*mm,70*mm,130*mm,194*mm,235*mm]
+    headers=["COLABORADOR","DEPARTAMENTO","CONTEÚDO","STATUS","PROGRESSO"]
+    pdf.setFillColor(pale);pdf.roundRect(18*mm,h-48*mm,w-36*mm,9*mm,2*mm,fill=1,stroke=0)
+    pdf.setFillColor(navy);pdf.setFont("Helvetica-Bold",7)
+    for x,label in zip(cols,headers):pdf.drawString(x,h-44*mm,label)
+    yy=h-55*mm
+    for e,usr,course,cam in data['rows'][:28]:
+        pdf.setFillColor(ink);pdf.setFont("Helvetica",7)
+        vals=[usr.name[:28],(usr.department or "Não informado")[:30],course.title[:34],e.status[:16],f"{e.progress}%"]
+        for x,val in zip(cols,vals):pdf.drawString(x,yy,str(val))
+        pdf.setStrokeColor(colors.HexColor("#E5EAF0"));pdf.line(18*mm,yy-2*mm,w-18*mm,yy-2*mm);yy-=8*mm
+    if not data['rows']:
+        pdf.setFillColor(muted);pdf.setFont("Helvetica",9);pdf.drawString(18*mm,yy,"Nenhuma matrícula encontrada para os filtros selecionados.")
+    pdf.setFillColor(muted);pdf.setFont("Helvetica",7);pdf.drawString(18*mm,11*mm,"Gertec Academy · Relatório interno · Dados conforme registros disponíveis no sistema")
+    pdf.save();buf.seek(0);s.close()
+    return StreamingResponse(buf,media_type="application/pdf",headers={"Content-Disposition":"attachment; filename=dashboard_treinamentos_gertec.pdf"})
+
 @app.get("/reports.csv")
 def report_csv(request:Request):
     s=db();require(request,s,["admin","rh"]);out=io.StringIO();w=csv.writer(out,delimiter=";");w.writerow(["Nome","Email","Departamento","Grupos","Treinamento","Progresso (%)","Status","Iniciado em","Última atividade","Segundos assistidos","Concluído","Atribuído em","Concluído em","Campanha"])
@@ -845,6 +985,34 @@ def forum_reply(pid:int,request:Request,body:str=Form(...)):
     s=db();u=require(request,s);parent=s.get(ForumPost,pid)
     if not parent:s.close();raise HTTPException(404)
     s.add(ForumPost(user_id=u.id,parent_id=pid,body=body.strip()));s.commit();s.close();return RedirectResponse("/forum",303)
+
+@app.post("/forum/{pid}/delete")
+def forum_delete(pid:int,request:Request):
+    s=db();u=require(request,s);post=s.get(ForumPost,pid)
+    if not post:s.close();raise HTTPException(404)
+    if post.parent_id is not None:
+        if post.user_id!=u.id and u.role!="admin":s.close();raise HTTPException(403,"Você só pode excluir sua própria resposta.")
+        def reply_descendants(parent_id):
+            found=[]
+            for child in s.query(ForumPost).filter_by(parent_id=parent_id).all():
+                found.extend(reply_descendants(child.id));found.append(child)
+            return found
+        children=reply_descendants(post.id)
+        audit(s,request,u,"forum.reply.deleted","forum_post",post.id,f"Resposta e {len(children)} resposta(s) subordinada(s) excluídas")
+        for child in children:s.delete(child)
+        s.delete(post)
+    else:
+        if post.user_id!=u.id and u.role!="admin":s.close();raise HTTPException(403,"Você só pode excluir sua própria discussão.")
+        def descendants(parent_id):
+            found=[]
+            for child in s.query(ForumPost).filter_by(parent_id=parent_id).all():
+                found.extend(descendants(child.id));found.append(child)
+            return found
+        replies=descendants(post.id)
+        audit(s,request,u,"forum.discussion.deleted","forum_post",post.id,f"Discussão e {len(replies)} resposta(s) removidas")
+        for reply in replies:s.delete(reply)
+        s.delete(post)
+    s.commit();s.close();return RedirectResponse("/forum",303)
 
 @app.get("/admin/audit",response_class=HTMLResponse)
 def audit_page(request:Request):

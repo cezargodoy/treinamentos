@@ -584,8 +584,10 @@ async def learning_event(request:Request):
         e.progress=max(e.progress,min(99,int(e.watched_seconds/(c.duration_minutes*60)*100)))
     if event_type=="ended" and c.duration_minutes>0 and e.watched_seconds >= int(c.duration_minutes*60*0.9):
         e.progress=100;e.status="Concluído";e.completed_at=now
-        if not s.query(Certificate).filter_by(user_id=u.id,course_id=cid,campaign_id=None).first(): s.add(Certificate(code="GAC-"+secrets.token_hex(6).upper(),user_id=u.id,course_id=cid))
-        if e.campaign_id: issue_campaign_certificate_if_complete(s,u.id,e.campaign_id)
+        if e.campaign_id:
+            issue_campaign_certificate_if_complete(s,u.id,e.campaign_id)
+        elif not s.query(Certificate).filter_by(user_id=u.id,course_id=cid,campaign_id=None).first():
+            s.add(Certificate(code="GAC-"+secrets.token_hex(6).upper(),user_id=u.id,course_id=cid))
     s.commit();result={"progress":e.progress,"watched_seconds":e.watched_seconds,"status":e.status};s.close();return result
 
 @app.post("/learn/{cid}/complete")
@@ -593,9 +595,11 @@ def complete(cid:int,request:Request):
     s=db();u=require(request,s);e=s.query(Enrollment).filter_by(user_id=u.id,course_id=cid).first()
     if not e:s.close();raise HTTPException(403)
     e.progress=100;e.status="Concluído";e.completed_at=datetime.utcnow();e.started_at=e.started_at or e.enrolled_at;e.last_activity=datetime.utcnow()
-    cert=s.query(Certificate).filter_by(user_id=u.id,course_id=cid).first()
-    if not cert:s.add(Certificate(code="GAC-"+secrets.token_hex(6).upper(),user_id=u.id,course_id=cid))
-    if e.campaign_id: issue_campaign_certificate_if_complete(s,u.id,e.campaign_id)
+    if e.campaign_id:
+        issue_campaign_certificate_if_complete(s,u.id,e.campaign_id)
+    else:
+        cert=s.query(Certificate).filter_by(user_id=u.id,course_id=cid,campaign_id=None).first()
+        if not cert:s.add(Certificate(code="GAC-"+secrets.token_hex(6).upper(),user_id=u.id,course_id=cid))
     s.commit();s.close();return RedirectResponse("/certificates",303)
 @app.post("/courses/{cid}/assessment")
 def save_assessment(cid:int,request:Request,title:str=Form("Avaliação"),passing_score:int=Form(70),max_attempts:int=Form(2),question:list[str]=Form([]),answer:list[str]=Form([]),publish:str=Form("")):
@@ -628,8 +632,10 @@ def submit_assessment(cid:int,request:Request,answers:list[str]=Form([])):
     s.add(AssessmentAttempt(assessment_id=a.id,user_id=u.id,score=score,passed=passed))
     if passed:
         enrollment.progress=max(enrollment.progress,100);enrollment.status="Concluído";enrollment.completed_at=datetime.utcnow();enrollment.last_activity=datetime.utcnow()
-        if not s.query(Certificate).filter_by(user_id=u.id,course_id=cid,campaign_id=None).first():s.add(Certificate(code="GAC-"+secrets.token_hex(6).upper(),user_id=u.id,course_id=cid))
-        if enrollment.campaign_id: issue_campaign_certificate_if_complete(s,u.id,enrollment.campaign_id)
+        if enrollment.campaign_id:
+            issue_campaign_certificate_if_complete(s,u.id,enrollment.campaign_id)
+        elif not s.query(Certificate).filter_by(user_id=u.id,course_id=cid,campaign_id=None).first():
+            s.add(Certificate(code="GAC-"+secrets.token_hex(6).upper(),user_id=u.id,course_id=cid))
     s.commit();s.close();return RedirectResponse(f"/learn/{cid}?assessment_score={score}&passed={1 if passed else 0}",303)
 @app.get("/certificates",response_class=HTMLResponse)
 def certificates(request:Request):
@@ -638,6 +644,10 @@ def certificates(request:Request):
     items=[]
     for cert in q.order_by(Certificate.issued_at.desc()).all():
         usr=s.get(User,cert.user_id); course=s.get(Course,cert.course_id); campaign=s.get(Campaign,cert.campaign_id) if cert.campaign_id else None
+        # Certificados antigos emitidos por curso dentro de uma campanha não devem
+        # competir com o certificado oficial da campanha.
+        if campaign is None and s.query(Enrollment).filter(Enrollment.user_id==cert.user_id,Enrollment.course_id==cert.course_id,Enrollment.campaign_id.isnot(None)).first():
+            continue
         items.append((cert,usr,campaign.title if campaign else (course.title if course else "Treinamento"),campaign_duration_label(campaign) if campaign else (f"{(course.duration_minutes or 60)//60}h"+(f"{(course.duration_minutes or 60)%60}min" if (course.duration_minutes or 60)%60 else ""))))
     result=render("certificates.html",user=u,items=items);s.close();return result
 
@@ -817,7 +827,7 @@ def collect_report_data(s, start_date="", end_date="", campaign_id="", departmen
         dt=e.completed_at or e.enrolled_at;key=dt.strftime("%m/%Y");monthly[key]=monthly.get(key,0)+(1 if e.status=="Concluído" else 0)
     watched=sum(max(0,int(e.watched_seconds or 0)) for e,_,_,_ in rows)
     return {"rows":rows,"total":total,"done":done,"pending":pending,"pct":round(done*100/total) if total else 0,
-            "departments":sorted(departments.items(),key=lambda x:x[0]),"top_courses":sorted(course_counts.items(),key=lambda x:x[1],reverse=True)[:8],
+            "department_stats":sorted(departments.items(),key=lambda x:x[0]),"top_courses":sorted(course_counts.items(),key=lambda x:x[1],reverse=True)[:8],
             "monthly":sorted(monthly.items(),key=lambda x:datetime.strptime(x[0],"%m/%Y")),"watched_hours":round(watched/3600,1)}
 
 @app.get("/reports",response_class=HTMLResponse)
@@ -860,7 +870,7 @@ def report_pdf(request:Request,start_date:str="",end_date:str="",campaign_id:str
     # Department completion bars
     y0=card_y-13*mm;pdf.setFillColor(navy);pdf.setFont("Helvetica-Bold",10);pdf.drawString(18*mm,y0,"Conclusões por departamento")
     y=y0-9*mm
-    for name,(count,completed) in data['departments'][:8]:
+    for name,(count,completed) in data['department_stats'][:8]:
         if y<24*mm:break
         label=(name[:26]+"…") if len(name)>27 else name
         pdf.setFillColor(muted);pdf.setFont("Helvetica",8);pdf.drawString(18*mm,y,label)

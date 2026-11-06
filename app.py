@@ -896,7 +896,7 @@ def report_pdf(request:Request,start_date:str="",end_date:str="",campaign_id:str
     for x,label in zip(cols,headers):pdf.drawString(x,h-44*mm,label)
     yy=h-55*mm
     for e,usr,course,cam in data['rows'][:28]:
-        pdf.setFillColor(ink);pdf.setFont("Helvetica",7)
+        pdf.setFillColor(navy);pdf.setFont("Helvetica",7)
         vals=[usr.name[:28],(usr.department or "Não informado")[:30],course.title[:34],e.status[:16],f"{e.progress}%"]
         for x,val in zip(cols,vals):pdf.drawString(x,yy,str(val))
         pdf.setStrokeColor(colors.HexColor("#E5EAF0"));pdf.line(18*mm,yy-2*mm,w-18*mm,yy-2*mm);yy-=8*mm

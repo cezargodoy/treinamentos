@@ -48,13 +48,3 @@ uvicorn app:app --reload
 ```
 
 Em produção, nunca use SQLite no filesystem efêmero do container.
-
-## Atualização de perfil, avaliações e biblioteca de conteúdo
-
-Esta versão adiciona campos de perfil (biografia, cargo, experiência e interesses), armazenamento binário de fotos na tabela `users` do PostgreSQL, editor de avaliações de certo/errado e a nomenclatura Biblioteca de conteúdo. As tabelas de avaliação são criadas de forma aditiva por `Base.metadata.create_all`; colunas novas de perfil são adicionadas pela rotina de migração aditiva existente.
-
-Após publicar, cada colaborador que já tinha foto armazenada apenas no disco local do serviço deverá enviar a foto novamente uma vez para gravá-la no PostgreSQL. Faça backup do PostgreSQL antes do deploy.
-
-As avaliações são configuradas em Biblioteca de conteúdo > Configurar avaliação / prova. A publicação torna a prova visível na jornada do colaborador. A aprovação registra a conclusão e emite certificado.
-
-O player de SharePoint depende das permissões de compartilhamento e das políticas de incorporação do Microsoft 365. Links de compartilhamento que não sejam URLs de incorporação podem exigir ajuste no SharePoint; o botão Abrir no Microsoft 365 permanece disponível como alternativa.

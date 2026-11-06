@@ -1,8 +1,58 @@
 {% extends "base.html" %}{% block content %}
 {% if admin %}
-<div class="heading"><div><span class="eyebrow">VISÃO GERAL DA UNIVERSIDADE CORPORATIVA</span><h1>Olá, {{ user.name.split()[0] }}!</h1><p>Acompanhe os treinamentos, as campanhas e o desenvolvimento das equipes.</p></div><div class="heading-actions"><a class="btn" href="/courses">＋ Cadastrar treinamento</a><form method="post" action="/admin/learner-mode"><input type="hidden" name="enabled" value="on"><button class="btn secondary">Entrar como aluno</button></form></div></div>
-<div class="metrics"><div class="metric"><small>COLABORADORES CADASTRADOS</small><strong>{{ users }}</strong><span>Usuários do diretório corporativo</span></div><div class="metric"><small>TREINAMENTOS DISPONÍVEIS</small><strong>{{ courses }}</strong><span>Na biblioteca de conteúdos</span></div><div class="metric"><small>CAMPANHAS EM ANDAMENTO</small><strong>{{ campaigns }}</strong><span>Com inscrições abertas</span></div><div class="metric"><small>TAXA DE CONCLUSÃO</small><strong>{{ pct }}%</strong><span>{{ done }} de {{ total }} matrículas</span></div></div>
-<div class="columns"><section class="card"><h2>Indicadores de aprendizagem</h2><p>Distribuição geral das matrículas</p><div class="chart-row"><span>Concluídos</span><div class="chart-track"><i class="chart-blue" style="width:{{pct}}%"></i></div><b>{{done}}</b></div><div class="chart-row"><span>Pendentes / em andamento</span><div class="chart-track"><i class="chart-yellow" style="width:{{100-pct}}%"></i></div><b>{{total-done}}</b></div><p class="hint">Acompanhe os detalhes em Relatórios e indicadores.</p></section><section class="card"><h2>Gestão de treinamentos</h2><p>Organize os conteúdos e acompanhe os resultados das ações de aprendizagem.</p><div class="quick"><a href="/courses">Biblioteca de treinamentos <b>→</b></a><a href="/campaigns">Criar nova campanha <b>→</b></a><a href="/admin/groups">Organizar grupos de usuários <b>→</b></a><a href="/admin/permissions">Configurar permissões por perfil <b>→</b></a><a href="/forum">Acessar fórum corporativo <b>→</b></a><a href="/reports">Acompanhar resultados e exportar relatório <b>→</b></a><a href="/admin/sync-users">Atualizar cadastro pelo Microsoft Entra ID <b>→</b></a></div></section><section class="card"><h2>Acompanhamento e governança</h2><p>Crie campanhas para direcionar treinamentos obrigatórios por público e prazo. Consulte os relatórios para acompanhar a participação e a conclusão.</p><div class="callout">Acesso integrado ao Microsoft 365, conforme as permissões configuradas pela equipe responsável.</div></section></div>
-{% else %}
-<div class="heading"><div><span class="eyebrow">MEU ESPAÇO DE APRENDIZAGEM</span><h1>Olá, {{ user.name.split()[0] }}!</h1><p>Acesse seus treinamentos, acompanhe seu progresso e consulte suas conquistas.</p></div>{% if user.role=="admin" %}<form method="post" action="/admin/learner-mode"><button class="btn secondary">Voltar à visão de administrador</button></form>{% endif %}</div><div class="metrics"><div class="metric"><small>TREINAMENTOS ATRIBUÍDOS DISPONÍVEIS</small><strong>{{ enrollments|length }}</strong><span>Designados para você</span></div><div class="metric"><small>TREINAMENTOS CONCLUÍDOS</small><strong>{{ enrollments|selectattr('0.status','equalto','Concluído')|list|length }}</strong><span>Concluídos com sucesso</span></div><div class="metric"><small>CERTIFICADOS EMITIDOS</small><strong>{{ certs }}</strong><span>Disponíveis para consulta</span></div></div><section class="card"><h2>Meu progresso geral</h2><div class="bar"><i style="width:{{avg_progress}}%"></i></div><p>{{avg_progress}}% de progresso médio nos treinamentos atribuídos.</p></section><section class="card"><h2>Minha jornada de aprendizagem</h2><div class="courses">{% for e,c in enrollments %}<article><div class="thumb">▶</div><div><small>{{ c.category }} · {{ c.duration_minutes }} MIN</small><h3>{{ c.title }}</h3><div class="bar"><i style="width:{{ e.progress }}%"></i></div><p>{{ e.progress }}% · {{ e.status }}　<a href="/learn/{{ c.id }}">Acessar →</a></p></div></article>{% else %}<p>Você ainda não possui treinamentos atribuídos.</p>{% endfor %}</div></section>
+<style>
+.dashboard-grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:14px;margin:22px 0}
+.dash-kpi{background:#fff;border:1px solid #e4eaf2;border-radius:14px;padding:18px;box-shadow:0 3px 12px rgba(15,40,75,.04);min-width:0}
+.dash-kpi small{display:block;color:#718096;font-size:10px;font-weight:700;letter-spacing:.07em;min-height:28px}
+.dash-kpi strong{display:block;color:#102b50;font-size:28px;margin:8px 0 4px}
+.dash-kpi span{font-size:11px;color:#6b7d91}
+.dash-panels{display:grid;grid-template-columns:1.7fr 1fr;gap:16px;margin-bottom:16px}
+.dash-bottom{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.dash-card{background:#fff;border:1px solid #e4eaf2;border-radius:14px;padding:20px;box-shadow:0 3px 12px rgba(15,40,75,.04);min-width:0}
+.dash-card h2{font-size:16px;margin:0 0 5px;color:#102b50}
+.dash-card .sub{font-size:12px;color:#8291a3;margin:0 0 16px}
+.dash-line{width:100%;height:220px;display:block}
+.dash-legend{display:flex;gap:16px;flex-wrap:wrap;font-size:11px;color:#6b7d91;margin-top:8px}
+.dash-dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:5px}
+.dash-donut-wrap{display:flex;align-items:center;justify-content:center;padding:12px 0}
+.dash-donut{width:176px;height:176px;border-radius:50%;background:conic-gradient(#145bd7 0 {{ pct }}%,#78a9f5 {{ pct }}% {{ pct + (in_progress * 100 / total if total else 0) }}%,#d9e0e9 {{ pct + (in_progress * 100 / total if total else 0) }}% 100%);position:relative}
+.dash-donut:after{content:"";position:absolute;inset:28px;background:white;border-radius:50%}
+.dash-donut-center{position:absolute;z-index:1;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#102b50;font-size:25px;font-weight:700}
+.dash-donut-center small{font-size:10px;color:#8190a3;font-weight:500}
+.dash-legend-row{display:flex;justify-content:center;gap:14px;flex-wrap:wrap;font-size:11px;color:#6b7d91}
+.dash-bar-row{display:grid;grid-template-columns:105px 1fr 42px;align-items:center;gap:10px;margin:17px 0;font-size:12px;color:#5e7085}
+.dash-track{height:10px;background:#edf1f6;border-radius:20px;overflow:hidden}
+.dash-track i{height:100%;display:block;background:#1764df;border-radius:20px}
+.dash-course{margin:16px 0}
+.dash-course-head{display:flex;justify-content:space-between;gap:12px;font-size:12px;color:#53677e;margin-bottom:7px}
+.dash-course .dash-track{height:8px}
+.dash-actions{display:flex;gap:9px;flex-wrap:wrap;margin-top:18px}
+@media(max-width:1100px){.dashboard-grid{grid-template-columns:repeat(3,1fr)}}
+@media(max-width:760px){.dashboard-grid{grid-template-columns:repeat(2,1fr)}.dash-panels,.dash-bottom{grid-template-columns:1fr}.dash-bar-row{grid-template-columns:90px 1fr 35px}}
+</style>
+<div class="heading"><div><span class="eyebrow">VISÃO GERAL DA UNIVERSIDADE CORPORATIVA</span><h1>Dashboard</h1><p>Visão executiva da operação de aprendizagem e desenvolvimento.</p></div><div class="heading-actions"><a class="btn" href="/courses">＋ Cadastrar conteúdo</a><form method="post" action="/admin/learner-mode"><input type="hidden" name="enabled" value="on"><button class="btn secondary">Entrar como aluno</button></form></div></div>
+<div class="dashboard-grid">
+<div class="dash-kpi"><small>COLABORADORES ATIVOS</small><strong>{{ users }}</strong><span>Usuários habilitados</span></div>
+<div class="dash-kpi"><small>CONTEÚDOS PUBLICADOS</small><strong>{{ courses }}</strong><span>Na biblioteca de conteúdo</span></div>
+<div class="dash-kpi"><small>CAMPANHAS ATIVAS</small><strong>{{ campaigns }}</strong><span>Campanhas em andamento</span></div>
+<div class="dash-kpi"><small>TAXA DE CONCLUSÃO</small><strong>{{ pct }}%</strong><span>{{ done }} de {{ total }} matrículas concluídas</span></div>
+<div class="dash-kpi"><small>TREINAMENTOS PENDENTES</small><strong>{{ pending }}</strong><span>{{ in_progress }} em andamento</span></div>
+<div class="dash-kpi"><small>CERTIFICADOS EMITIDOS</small><strong>{{ certs }}</strong><span>Certificados registrados</span></div>
+</div>
+<div class="dash-panels">
+<section class="dash-card"><h2>Evolução de conclusões</h2><p class="sub">Conclusões registradas nos últimos 9 meses</p>
+<svg class="dash-line" viewBox="0 0 680 220" role="img" aria-label="Gráfico de evolução mensal de conclusões">
+<line x1="40" y1="180" x2="650" y2="180" stroke="#dce4ee"/><line x1="40" y1="110" x2="650" y2="110" stroke="#edf1f6" stroke-dasharray="4 4"/><line x1="40" y1="40" x2="650" y2="40" stroke="#edf1f6" stroke-dasharray="4 4"/>
+<polyline points="{{ trend_points }}" fill="none" stroke="#1764df" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+{% for item in trend %}<text x="{{ 40+loop.index0*78 }}" y="205" font-size="11" text-anchor="middle" fill="#75869a">{{ item.label }}</text>{% endfor %}
+</svg><div class="dash-legend"><span><i class="dash-dot" style="background:#1764df"></i>Conclusões por mês</span><span>Dados calculados a partir das matrículas concluídas</span></div></section>
+<section class="dash-card"><h2>Status dos alunos</h2><p class="sub">Distribuição atual das matrículas</p><div class="dash-donut-wrap"><div class="dash-donut"><div class="dash-donut-center">{{ total }}<small>MATRÍCULAS</small></div></div></div><div class="dash-legend-row"><span><i class="dash-dot" style="background:#145bd7"></i>Concluído {{ done }}</span><span><i class="dash-dot" style="background:#78a9f5"></i>Em andamento {{ in_progress }}</span><span><i class="dash-dot" style="background:#d9e0e9"></i>Pendente {{ pending }}</span></div></section>
+</div>
+<div class="dash-bottom">
+<section class="dash-card"><h2>Progresso por departamento</h2><p class="sub">Percentual de matrículas concluídas</p>
+{% for row in team_rows %}<div class="dash-bar-row"><span title="{{ row.name }}">{{ row.name|truncate(18) }}</span><div class="dash-track"><i style="width:{{ row.pct }}%"></i></div><b>{{ row.pct }}%</b></div>{% else %}<p class="sub">Ainda não há departamentos com matrículas suficientes para exibir este indicador.</p>{% endfor %}</section>
+<section class="dash-card"><h2>Conteúdos mais acessados</h2><p class="sub">Interações registradas na plataforma</p>
+{% for row in top_courses %}<div class="dash-course"><div class="dash-course-head"><span>{{ row.title|truncate(48) }}</span><b>{{ row.views }}</b></div><div class="dash-track"><i style="width:{{ (row.views * 100 / (top_courses[0].views if top_courses and top_courses[0].views else 1))|round }}%"></i></div></div>{% else %}<p class="sub">Nenhuma interação registrada ainda.</p>{% endfor %}<div class="dash-actions"><a class="btn secondary" href="/reports">Ver relatórios e indicadores →</a><a class="btn secondary" href="/campaigns">Gerenciar campanhas →</a></div></section>
+</div>
+{% else %}<div class="heading"><div><span class="eyebrow">MEU ESPAÇO DE APRENDIZAGEM</span><h1>Olá, {{ user.name.split()[0] }}!</h1><p>Acesse seus treinamentos, acompanhe seu progresso e consulte suas conquistas.</p></div>{% if user.role=="admin" %}<form method="post" action="/admin/learner-mode"><button class="btn secondary">Voltar à visão de administrador</button></form>{% endif %}</div><div class="metrics"><div class="metric"><small>TREINAMENTOS ATRIBUÍDOS DISPONÍVEIS</small><strong>{{ enrollments|length }}</strong><span>Designados para você</span></div><div class="metric"><small>TREINAMENTOS CONCLUÍDOS</small><strong>{{ enrollments|selectattr('0.status','equalto','Concluído')|list|length }}</strong><span>Concluídos com sucesso</span></div><div class="metric"><small>CERTIFICADOS EMITIDOS</small><strong>{{ certs }}</strong><span>Disponíveis para consulta</span></div></div><section class="card"><h2>Meu progresso geral</h2><div class="bar"><i style="width:{{avg_progress}}%"></i></div><p>{{avg_progress}}% de progresso médio nos treinamentos atribuídos.</p></section><section class="card"><h2>Minha jornada de aprendizagem</h2><div class="courses">{% for e,c in enrollments %}<article><div class="thumb">▶</div><div><small>{{ c.category }} · {{ c.duration_minutes }} MIN</small><h3>{{ c.title }}</h3><div class="bar"><i style="width:{{ e.progress }}%"></i></div><p>{{ e.progress }}% · {{ e.status }}　<a href="/learn/{{ c.id }}">Acessar →</a></p></div></article>{% else %}<p>Você ainda não possui treinamentos atribuídos.</p>{% endfor %}</div></section>
 {% endif %}{% endblock %}

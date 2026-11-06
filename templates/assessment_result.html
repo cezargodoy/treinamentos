@@ -1,1 +1,0 @@
-{% extends "base.html" %}{% block content %}<section class="card"><span class="eyebrow">RESULTADO</span><h1>{{score}}%</h1><h2>{{'Aprovado!' if passed else 'Não atingiu a nota mínima'}}</h2><p>Nota mínima: {{assessment.passing_score}}%</p><a class="btn" href="/learn/{{course.id}}">Voltar ao conteúdo</a></section>{% endblock %}

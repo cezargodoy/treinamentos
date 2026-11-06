@@ -1,14 +1,14 @@
-import os, csv, io, secrets, hashlib, hmac, json
+import os, csv, io, secrets, hashlib, hmac
 from datetime import datetime, date, timezone
 from zoneinfo import ZoneInfo
 from urllib.parse import quote
 import httpx
 from fastapi import FastAPI, Request, Form, HTTPException, UploadFile, File
-from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 from authlib.integrations.starlette_client import OAuth
-from sqlalchemy import create_engine, String, Integer, Boolean, DateTime, ForeignKey, Text, func, UniqueConstraint
+from sqlalchemy import create_engine, String, Integer, Boolean, DateTime, ForeignKey, Text, func, UniqueConstraint, LargeBinary
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
@@ -39,36 +39,8 @@ class User(Base):
     password_hash:Mapped[str|None]=mapped_column(String(300),nullable=True)
     last_login:Mapped[datetime]=mapped_column(DateTime,default=datetime.utcnow)
     photo_path:Mapped[str]=mapped_column(String(500),default="")
-    bio:Mapped[str]=mapped_column(Text,default="")
-    job_title:Mapped[str]=mapped_column(String(180),default="")
-    interests:Mapped[str]=mapped_column(Text,default="")
-class Assessment(Base):
-    __tablename__="assessments"
-    id:Mapped[int]=mapped_column(primary_key=True)
-    course_id:Mapped[int]=mapped_column(ForeignKey("courses.id"),index=True)
-    title:Mapped[str]=mapped_column(String(240))
-    instructions:Mapped[str]=mapped_column(Text,default="")
-    passing_score:Mapped[int]=mapped_column(Integer,default=70)
-    max_attempts:Mapped[int]=mapped_column(Integer,default=0)
-    published:Mapped[bool]=mapped_column(Boolean,default=False)
-    created_at:Mapped[datetime]=mapped_column(DateTime,default=datetime.utcnow)
-class AssessmentQuestion(Base):
-    __tablename__="assessment_questions"
-    id:Mapped[int]=mapped_column(primary_key=True)
-    assessment_id:Mapped[int]=mapped_column(ForeignKey("assessments.id"),index=True)
-    prompt:Mapped[str]=mapped_column(Text)
-    correct_answer:Mapped[bool]=mapped_column(Boolean,default=True)
-    explanation:Mapped[str]=mapped_column(Text,default="")
-    position:Mapped[int]=mapped_column(Integer,default=0)
-class AssessmentAttempt(Base):
-    __tablename__="assessment_attempts"
-    id:Mapped[int]=mapped_column(primary_key=True)
-    assessment_id:Mapped[int]=mapped_column(ForeignKey("assessments.id"),index=True)
-    user_id:Mapped[int]=mapped_column(ForeignKey("users.id"),index=True)
-    score:Mapped[int]=mapped_column(Integer,default=0)
-    passed:Mapped[bool]=mapped_column(Boolean,default=False)
-    answers_json:Mapped[str]=mapped_column(Text,default="{}")
-    created_at:Mapped[datetime]=mapped_column(DateTime,default=datetime.utcnow)
+    photo_data:Mapped[bytes|None]=mapped_column(LargeBinary,nullable=True)
+    photo_mime:Mapped[str]=mapped_column(String(40),default="")
 class Course(Base):
     __tablename__="courses"
     id:Mapped[int]=mapped_column(primary_key=True)
@@ -176,10 +148,9 @@ if "password_hash" not in [c["name"] for c in inspect(engine).get_columns("users
 with engine.begin() as conn:
     cols={c["name"] for c in inspect(engine).get_columns("users")}
     if "photo_path" not in cols: conn.execute(text("ALTER TABLE users ADD COLUMN photo_path VARCHAR(500) DEFAULT ''"))
-    cols={c["name"] for c in inspect(engine).get_columns("users")}
-    if "bio" not in cols: conn.execute(text("ALTER TABLE users ADD COLUMN bio TEXT DEFAULT ''"))
-    if "job_title" not in cols: conn.execute(text("ALTER TABLE users ADD COLUMN job_title VARCHAR(180) DEFAULT ''"))
-    if "interests" not in cols: conn.execute(text("ALTER TABLE users ADD COLUMN interests TEXT DEFAULT ''"))
+    if "photo_data" not in cols:
+        conn.execute(text("ALTER TABLE users ADD COLUMN photo_data BYTEA" if engine.dialect.name == "postgresql" else "ALTER TABLE users ADD COLUMN photo_data BLOB"))
+    if "photo_mime" not in cols: conn.execute(text("ALTER TABLE users ADD COLUMN photo_mime VARCHAR(40) DEFAULT ''"))
     cols={c["name"] for c in inspect(engine).get_columns("courses")}
     if "available_from" not in cols: conn.execute(text("ALTER TABLE courses ADD COLUMN available_from TIMESTAMP NULL"))
     if "available_until" not in cols: conn.execute(text("ALTER TABLE courses ADD COLUMN available_until TIMESTAMP NULL"))
@@ -390,60 +361,6 @@ def campaign_edit(campaign_id:int,request:Request,title:str=Form(...),descriptio
         if role in ("colaborador","gestor","rh","admin"):s.add(CampaignRole(campaign_id=c.id,role=role))
     audit(s,request,user_for(request,s),"campaign.updated","campaign",c.id,f"Cursos={len(course_ids)}; perfis={','.join(set(roles))}")
     s.commit();s.close();return RedirectResponse("/campaigns",303)
-@app.get("/courses/{cid}/assessment",response_class=HTMLResponse)
-def assessment_admin(cid:int,request:Request):
-    s=db();u=require(request,s,["admin","rh"]);course=s.get(Course,cid)
-    if not course:s.close();raise HTTPException(404)
-    assessment=s.query(Assessment).filter_by(course_id=cid).first()
-    questions=s.query(AssessmentQuestion).filter_by(assessment_id=assessment.id).order_by(AssessmentQuestion.position).all() if assessment else []
-    result=render("assessment_admin.html",user=u,course=course,assessment=assessment,questions=questions);s.close();return result
-@app.post("/courses/{cid}/assessment")
-def assessment_create(cid:int,request:Request,title:str=Form(...),instructions:str=Form(""),passing_score:int=Form(70),max_attempts:int=Form(0)):
-    s=db();u=require(request,s,["admin","rh"]);course=s.get(Course,cid)
-    if not course:s.close();raise HTTPException(404)
-    a=s.query(Assessment).filter_by(course_id=cid).first()
-    if not a:a=Assessment(course_id=cid,title=title.strip());s.add(a)
-    a.title=title.strip()[:240];a.instructions=instructions.strip();a.passing_score=max(0,min(100,passing_score));a.max_attempts=max(0,min(100,max_attempts))
-    s.commit();s.close();return RedirectResponse(f"/courses/{cid}/assessment",303)
-@app.post("/courses/{cid}/assessment/question")
-def assessment_add_question(cid:int,request:Request,prompt:str=Form(...),correct_answer:str=Form(...),explanation:str=Form("")):
-    s=db();require(request,s,["admin","rh"]);a=s.query(Assessment).filter_by(course_id=cid).first()
-    if not a:s.close();raise HTTPException(404,"Crie a avaliação antes das questões.")
-    count=s.query(AssessmentQuestion).filter_by(assessment_id=a.id).count()
-    s.add(AssessmentQuestion(assessment_id=a.id,prompt=prompt.strip(),correct_answer=correct_answer=="true",explanation=explanation.strip(),position=count))
-    s.commit();s.close();return RedirectResponse(f"/courses/{cid}/assessment",303)
-@app.post("/courses/{cid}/assessment/publish")
-def assessment_publish(cid:int,request:Request):
-    s=db();require(request,s,["admin","rh"]);a=s.query(Assessment).filter_by(course_id=cid).first()
-    if not a:s.close();raise HTTPException(404)
-    if s.query(AssessmentQuestion).filter_by(assessment_id=a.id).count()<1:s.close();raise HTTPException(400,"Adicione ao menos uma questão.")
-    a.published=not a.published;s.commit();s.close();return RedirectResponse(f"/courses/{cid}/assessment",303)
-@app.get("/learn/{cid}/assessment",response_class=HTMLResponse)
-def assessment_take(cid:int,request:Request):
-    s=db();u=require(request,s);e=s.query(Enrollment).filter_by(user_id=u.id,course_id=cid).first()
-    a=s.query(Assessment).filter_by(course_id=cid,published=True).first()
-    if not e or not a:s.close();raise HTTPException(404)
-    questions=s.query(AssessmentQuestion).filter_by(assessment_id=a.id).order_by(AssessmentQuestion.position).all()
-    attempts=s.query(AssessmentAttempt).filter_by(assessment_id=a.id,user_id=u.id).count()
-    if a.max_attempts and attempts>=a.max_attempts:s.close();raise HTTPException(403,"Limite de tentativas atingido.")
-    result=render("assessment_take.html",user=u,course=s.get(Course,cid),assessment=a,questions=questions);s.close();return result
-@app.post("/learn/{cid}/assessment")
-async def assessment_submit(cid:int,request:Request):
-    s=db();u=require(request,s);e=s.query(Enrollment).filter_by(user_id=u.id,course_id=cid).first()
-    a=s.query(Assessment).filter_by(course_id=cid,published=True).first()
-    if not e or not a:s.close();raise HTTPException(404)
-    if a.max_attempts and s.query(AssessmentAttempt).filter_by(assessment_id=a.id,user_id=u.id).count()>=a.max_attempts:s.close();raise HTTPException(403,"Limite de tentativas atingido.")
-    form=await request.form();qs=s.query(AssessmentQuestion).filter_by(assessment_id=a.id).all()
-    if not qs:s.close();raise HTTPException(400,"Avaliação sem questões.")
-    answers={};correct=0
-    for q in qs:
-        val=str(form.get(f"q_{q.id}",""))
-        answer=val=="true";answers[str(q.id)]=answer
-        if answer==q.correct_answer:correct+=1
-    score=round(correct*100/len(qs));passed=score>=a.passing_score
-    s.add(AssessmentAttempt(assessment_id=a.id,user_id=u.id,score=score,passed=passed,answers_json=json.dumps(answers)))
-    s.commit();result=render("assessment_result.html",user=u,course=s.get(Course,cid),score=score,passed=passed,assessment=a);s.close();return result
-
 @app.get("/learn/{cid}",response_class=HTMLResponse)
 def learn(cid:int,request:Request):
     s=db();u=require(request,s);c=s.get(Course,cid)
@@ -457,8 +374,7 @@ def learn(cid:int,request:Request):
     if e:
         if not e.started_at: e.started_at=now;e.status="Em andamento";e.progress=max(e.progress,1)
         e.last_activity=now;s.commit()
-    assessment=s.query(Assessment).filter_by(course_id=cid,published=True).first()
-    result=render("learn.html",user=u,course=c,enrollment=e,assessment=assessment);s.close();return result
+    s.close();return render("learn.html",user=u,course=c,enrollment=e)
 @app.post("/learn/{cid}/progress")
 def update_progress(cid:int,request:Request,progress:int=Form(...)):
     s=db();u=require(request,s);e=s.query(Enrollment).filter_by(user_id=u.id,course_id=cid).first()
@@ -567,24 +483,28 @@ def directory(request:Request,q:str=""):
     users=query.order_by(User.name).limit(100).all();s.close();return render("directory.html",user=u,users=users,q=q)
 @app.get("/profile",response_class=HTMLResponse)
 def profile(request:Request):
-    s=db();u=require(request,s);result=render("profile.html",user=u);s.close();return result
-@app.post("/profile")
-def update_profile(request:Request,bio:str=Form(""),job_title:str=Form(""),interests:str=Form("")):
-    s=db();u=require(request,s)
-    u.bio=bio.strip()[:3000];u.job_title=job_title.strip()[:180];u.interests=interests.strip()[:1500]
-    s.commit();s.close();return RedirectResponse("/profile",303)
+    s=db();u=require(request,s);s.close();return render("profile.html",user=u)
+@app.get("/profile/photo/{user_id}")
+def profile_photo_file(user_id:int,request:Request):
+    s=db()
+    try:
+        require(request,s)
+        u=s.get(User,user_id)
+        if not u or not u.photo_data or u.photo_mime not in ("image/jpeg","image/png","image/webp"):
+            raise HTTPException(404,"Foto não encontrada.")
+        return Response(content=u.photo_data,media_type=u.photo_mime,headers={"Cache-Control":"private, max-age=3600","X-Content-Type-Options":"nosniff"})
+    finally:
+        s.close()
+
 @app.post("/profile/photo")
 async def profile_photo(request:Request,photo:UploadFile=File(...)):
     s=db();u=require(request,s);content=await photo.read()
-    if len(content)>3*1024*1024 or photo.content_type not in ("image/jpeg","image/png","image/webp"):
-        s.close();raise HTTPException(400,"Envie JPG, PNG ou WebP de até 3 MB.")
-    ext={"image/jpeg":"jpg","image/png":"png","image/webp":"webp"}[photo.content_type]
-    filename=f"user_{u.id}.{ext}";path=os.path.join("static","uploads",filename)
-    for old in ("jpg","png","webp"):
-        oldpath=os.path.join("static","uploads",f"user_{u.id}.{old}")
-        if os.path.exists(oldpath):os.remove(oldpath)
-    with open(path,"wb") as f:f.write(content)
-    u.photo_path="/static/uploads/"+filename;s.commit();s.close();return RedirectResponse("/profile",303)
+    mime=photo.content_type or ""
+    signatures={"image/jpeg":content.startswith(b"\xff\xd8\xff"),"image/png":content.startswith(b"\x89PNG\r\n\x1a\n"),"image/webp":len(content)>=12 and content[:4]==b"RIFF" and content[8:12]==b"WEBP"}
+    if len(content)>3*1024*1024 or not signatures.get(mime,False):
+        s.close();raise HTTPException(400,"Envie uma imagem JPG, PNG ou WebP válida de até 3 MB.")
+    u.photo_data=content;u.photo_mime=mime;u.photo_path=f"/profile/photo/{u.id}"
+    s.commit();s.close();return RedirectResponse("/profile",303)
 @app.get("/forum",response_class=HTMLResponse)
 def forum(request:Request):
     s=db();u=require(request,s);posts=s.query(ForumPost).filter_by(parent_id=None).order_by(ForumPost.created_at.desc()).all();items=[(p,s.get(User,p.user_id),[(r,s.get(User,r.user_id)) for r in s.query(ForumPost).filter_by(parent_id=p.id).order_by(ForumPost.created_at).all()]) for p in posts];s.close();return render("forum.html",user=u,items=items)
@@ -596,23 +516,6 @@ def forum_reply(pid:int,request:Request,body:str=Form(...)):
     s=db();u=require(request,s);parent=s.get(ForumPost,pid)
     if not parent:s.close();raise HTTPException(404)
     s.add(ForumPost(user_id=u.id,parent_id=pid,body=body.strip()));s.commit();s.close();return RedirectResponse("/forum",303)
-
-@app.post("/forum/{pid}/edit")
-def forum_edit(pid:int,request:Request,title:str=Form(""),body:str=Form(...)):
-    s=db();u=require(request,s);p=s.get(ForumPost,pid)
-    if not p:s.close();raise HTTPException(404,"Publicação não encontrada.")
-    if p.user_id!=u.id and u.role!="admin":s.close();raise HTTPException(403,"Você só pode editar suas próprias publicações.")
-    p.body=body.strip()
-    if p.parent_id is None:p.title=title.strip()[:240]
-    s.commit();s.close();return RedirectResponse("/forum",303)
-@app.post("/forum/{pid}/delete")
-def forum_delete(pid:int,request:Request):
-    s=db();u=require(request,s);p=s.get(ForumPost,pid)
-    if not p:s.close();raise HTTPException(404,"Publicação não encontrada.")
-    if p.user_id!=u.id and u.role!="admin":s.close();raise HTTPException(403,"Você só pode excluir suas próprias publicações.")
-    if p.parent_id is None:
-        s.query(ForumPost).filter_by(parent_id=p.id).delete(synchronize_session=False)
-    s.delete(p);s.commit();s.close();return RedirectResponse("/forum",303)
 
 @app.get("/admin/audit",response_class=HTMLResponse)
 def audit_page(request:Request):

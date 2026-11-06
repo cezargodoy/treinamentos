@@ -1073,8 +1073,11 @@ def admin_settings(request:Request):
              "smtp_host":val("smtp_host"),"smtp_port":val("smtp_port") or "587",
              "smtp_user":val("smtp_user"),"has_smtp_password":bool(val("smtp_password")),
              "smtp_from":val("smtp_from") or val("smtp_user")}
+    # Renderizar enquanto a sessão está aberta evita DetachedInstanceError
+    # ao acessar propriedades do usuário no template base.
+    result=render("settings.html",**context)
     s.close()
-    return render("settings.html",**context)
+    return result
 
 @app.post("/admin/settings")
 def save_admin_settings(request:Request,language:str=Form("pt-BR"),entra_tenant:str=Form(""),

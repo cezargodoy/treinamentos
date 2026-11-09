@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="workplace-hero">
+  <div class="workplace-hero-copy">
+    <div class="eyebrow">AMBIENTE DIGITAL CORPORATIVO</div>
+    <h1>Olá, {{ user.name.split(' ')[0] }}.</h1>
+    <p>Seu ponto central para conhecimento, processos e governança da Gertec.</p>
+  </div>
+  <div class="workplace-hero-mark"><span>G</span><small>WORKPLACE</small></div>
+</section>
+
+{% if is_admin %}
+<div class="workplace-section-head"><div><div class="eyebrow">VISÃO CORPORATIVA</div><h2>Visão geral da plataforma</h2></div><span class="workplace-updated">Dados dos módulos ativos</span></div>
+<div class="workplace-metrics">
+  <article class="workplace-metric"><span class="metric-icon">♙</span><small>COLABORADORES ATIVOS</small><strong>{{ active_users }}</strong><span>Usuários cadastrados</span></article>
+  <article class="workplace-metric"><span class="metric-icon">▤</span><small>CURSOS PUBLICADOS</small><strong>{{ published_courses }}</strong><span>Gertec Academy</span></article>
+  <article class="workplace-metric"><span class="metric-icon">⌘</span><small>PROCESSOS MAPEADOS</small><strong>{{ bpm_processes }}</strong><span>{{ bpm_roots }} macroprocessos</span></article>
+  <article class="workplace-metric"><span class="metric-icon">▧</span><small>DOCUMENTOS DE PROCESSOS</small><strong>{{ bpm_documents }}</strong><span>Repositório BPM</span></article>
+</div>
+{% else %}
+<div class="workplace-section-head"><div><div class="eyebrow">MEU AMBIENTE</div><h2>Minha jornada corporativa</h2></div></div>
+<div class="workplace-metrics">
+  <article class="workplace-metric"><span class="metric-icon">▤</span><small>MINHAS MATRÍCULAS</small><strong>{{ my_enrollments }}</strong><span>Cursos e trilhas</span></article>
+  <article class="workplace-metric"><span class="metric-icon">▶</span><small>EM ANDAMENTO</small><strong>{{ my_in_progress }}</strong><span>Treinamentos ativos</span></article>
+  <article class="workplace-metric"><span class="metric-icon">✓</span><small>CONCLUÍDOS</small><strong>{{ my_completed }}</strong><span>Treinamentos finalizados</span></article>
+  <article class="workplace-metric"><span class="metric-icon">⌘</span><small>PROCESSOS DISPONÍVEIS</small><strong>{{ bpm_processes }}</strong><span>Gertec BPM</span></article>
+</div>
+{% endif %}
+
+<div class="workplace-section-head"><div><div class="eyebrow">PLATAFORMA CORPORATIVA</div><h2>Seus módulos</h2><p>Acesse as soluções integradas conforme seu perfil e suas permissões.</p></div></div>
+<div class="workplace-module-grid">
+  <a class="workplace-module-card academy" href="/academy">
+    <div class="workplace-module-top"><span class="workplace-module-icon">▤</span><span class="module-state live">Disponível</span></div>
+    <h3>Gertec Academy</h3><p>Universidade corporativa, cursos, campanhas, avaliações, certificados e trilhas de aprendizagem.</p>
+    <span class="module-link">Acessar Academy <b>→</b></span>
+  </a>
+  <a class="workplace-module-card bpm" href="/bpm">
+    <div class="workplace-module-top"><span class="workplace-module-icon">⌘</span><span class="module-state live">Disponível</span></div>
+    <h3>Gertec BPM</h3><p>Cadeia de valor, processos, subprocessos, documentação, modelagem BPMN e playbooks.</p>
+    <span class="module-link">Acessar BPM <b>→</b></span>
+  </a>
+  <a class="workplace-module-card bcm" href="/bcm">
+    <div class="workplace-module-top"><span class="workplace-module-icon">▦</span><span class="module-state live">Disponível</span></div>
+    <h3>Gertec BCM</h3><p>Business Impact Analysis, continuidade de negócios, BCP e recuperação de desastres.</p>
+    <span class="module-link">Acessar BCM <b>→</b></span>
+  </a>
+  <article class="workplace-module-card planned">
+    <div class="workplace-module-top"><span class="workplace-module-icon">◈</span><span class="module-state">Planejado</span></div>
+    <h3>Gertec GRC</h3><p>Riscos corporativos, auditorias, controles, compliance, planos de ação e evidências.</p>
+    <span class="module-link muted">Módulo futuro</span>
+  </article>
+  <article class="workplace-module-card planned">
+    <div class="workplace-module-top"><span class="workplace-module-icon">♙</span><span class="module-state">Planejado</span></div>
+    <h3>Gertec People</h3><p>Estrutura organizacional, competências, desenvolvimento e jornada do colaborador.</p>
+    <span class="module-link muted">Módulo futuro</span>
+  </article>
+  <article class="workplace-module-card planned">
+    <div class="workplace-module-top"><span class="workplace-module-icon">▧</span><span class="module-state">Planejado</span></div>
+    <h3>Knowledge Center</h3><p>Base de conhecimento, políticas, procedimentos, manuais e documentos corporativos.</p>
+    <span class="module-link muted">Módulo futuro</span>
+  </article>
+  <article class="workplace-module-card planned">
+    <div class="workplace-module-top"><span class="workplace-module-icon">▥</span><span class="module-state">Planejado</span></div>
+    <h3>Gertec Analytics</h3><p>Indicadores executivos e visão integrada de desempenho dos módulos corporativos.</p>
+    <span class="module-link muted">Módulo futuro</span>
+  </article>
+</div>
+
+<div class="workplace-bottom-grid">
+  <section class="workplace-info-card"><div class="eyebrow">INTEGRAÇÃO</div><h3>Uma experiência corporativa unificada</h3><p>O Workplace centraliza a navegação e a identidade da plataforma. Cada módulo mantém suas funcionalidades, dados e regras de negócio, compartilhando os serviços comuns de autenticação, usuários e auditoria conforme a evolução da arquitetura.</p></section>
+  <section class="workplace-info-card"><div class="eyebrow">ACESSO RÁPIDO</div><h3>Serviços disponíveis</h3><a href="/courses">Biblioteca de conteúdo <span>→</span></a><a href="/bpm">Cadeia de valor e processos <span>→</span></a><a href="/directory">Diretório de pessoas <span>→</span></a><a href="/profile">Meu perfil <span>→</span></a></section>
+</div>
+{% endblock %}

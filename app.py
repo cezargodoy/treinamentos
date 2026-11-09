@@ -249,6 +249,56 @@ class EmailLog(Base):
     detail:Mapped[str]=mapped_column(Text,default="")
     sent_at:Mapped[datetime]=mapped_column(DateTime,default=datetime.utcnow)
 
+class WorkplaceNotification(Base):
+    __tablename__="workplace_notifications"
+    id:Mapped[int]=mapped_column(primary_key=True)
+    user_id:Mapped[int|None]=mapped_column(ForeignKey("users.id"),nullable=True,index=True)
+    title:Mapped[str]=mapped_column(String(200))
+    message:Mapped[str]=mapped_column(Text,default="")
+    target_module:Mapped[str]=mapped_column(String(60),default="workplace")
+    created_by:Mapped[int|None]=mapped_column(ForeignKey("users.id"),nullable=True)
+    created_at:Mapped[datetime]=mapped_column(DateTime,default=datetime.utcnow,index=True)
+    read_at:Mapped[datetime|None]=mapped_column(DateTime,nullable=True)
+
+class BCMBIA(Base):
+    __tablename__="bcm_bia"
+    id:Mapped[int]=mapped_column(primary_key=True)
+    activity:Mapped[str]=mapped_column(String(240),index=True)
+    department:Mapped[str]=mapped_column(String(160),default="")
+    process_code:Mapped[str]=mapped_column(String(80),default="")
+    owner:Mapped[str]=mapped_column(String(180),default="")
+    description:Mapped[str]=mapped_column(Text,default="")
+    mtpd_hours:Mapped[int]=mapped_column(Integer,default=0)
+    rto_hours:Mapped[int]=mapped_column(Integer,default=0)
+    rpo_hours:Mapped[int]=mapped_column(Integer,default=0)
+    impact_financial:Mapped[str]=mapped_column(String(30),default="Médio")
+    impact_operational:Mapped[str]=mapped_column(String(30),default="Médio")
+    impact_reputation:Mapped[str]=mapped_column(String(30),default="Médio")
+    dependencies:Mapped[str]=mapped_column(Text,default="")
+    resources:Mapped[str]=mapped_column(Text,default="")
+    criticality:Mapped[str]=mapped_column(String(30),default="Média")
+    status:Mapped[str]=mapped_column(String(30),default="Em análise")
+    created_by:Mapped[int|None]=mapped_column(ForeignKey("users.id"),nullable=True)
+    created_at:Mapped[datetime]=mapped_column(DateTime,default=datetime.utcnow)
+    updated_at:Mapped[datetime]=mapped_column(DateTime,default=datetime.utcnow,onupdate=datetime.utcnow)
+
+class BCMPlan(Base):
+    __tablename__="bcm_plans"
+    id:Mapped[int]=mapped_column(primary_key=True)
+    plan_type:Mapped[str]=mapped_column(String(30),default="BCP")
+    title:Mapped[str]=mapped_column(String(240))
+    department:Mapped[str]=mapped_column(String(160),default="")
+    version:Mapped[str]=mapped_column(String(40),default="1.0")
+    owner:Mapped[str]=mapped_column(String(180),default="")
+    status:Mapped[str]=mapped_column(String(30),default="Rascunho")
+    summary:Mapped[str]=mapped_column(Text,default="")
+    filename:Mapped[str]=mapped_column(String(240),default="")
+    mime_type:Mapped[str]=mapped_column(String(120),default="application/octet-stream")
+    file_data:Mapped[bytes|None]=mapped_column(LargeBinary,nullable=True)
+    created_by:Mapped[int|None]=mapped_column(ForeignKey("users.id"),nullable=True)
+    created_at:Mapped[datetime]=mapped_column(DateTime,default=datetime.utcnow)
+    updated_at:Mapped[datetime]=mapped_column(DateTime,default=datetime.utcnow,onupdate=datetime.utcnow)
+
 Base.metadata.create_all(engine)
 # Compatibilidade com bancos criados por versões anteriores do MVP.
 from sqlalchemy import inspect, text
@@ -633,7 +683,36 @@ def logout(request:Request):
     request.session.clear()
     return RedirectResponse("/login",303)
 @app.get("/",response_class=HTMLResponse)
-def home(request:Request):
+def workplace_home(request:Request):
+    s=db()
+    u=user_for(request,s)
+    if not u:
+        s.close()
+        return RedirectResponse("/login",303)
+    active_users=s.query(User).filter_by(active=True).count()
+    published_courses=s.query(Course).filter_by(published=True).count()
+    active_campaigns=s.query(Campaign).filter_by(active=True).count()
+    bpm_processes=s.query(BPMProcess).filter_by(active=True).count()
+    bpm_roots=s.query(BPMProcess).filter_by(active=True,parent_id=None).count()
+    bpm_documents=s.query(BPMDocument).count()
+    enrollments=s.query(Enrollment).filter_by(user_id=u.id).all()
+    in_progress=sum(1 for e in enrollments if e.status=="Em andamento")
+    pending=sum(1 for e in enrollments if e.status not in ("Em andamento","Concluído"))
+    completed=sum(1 for e in enrollments if e.status=="Concluído")
+    ctx=dict(
+        request=request,user=u,title="Gertec Workplace",
+        active_users=active_users,published_courses=published_courses,
+        active_campaigns=active_campaigns,bpm_processes=bpm_processes,
+        bpm_roots=bpm_roots,bpm_documents=bpm_documents,
+        my_enrollments=len(enrollments),my_in_progress=in_progress,
+        my_pending=pending,my_completed=completed,
+        is_admin=u.role in ("admin","rh","gestor")
+    )
+    s.close()
+    return render("workplace.html",**ctx)
+
+@app.get("/academy",response_class=HTMLResponse)
+def academy_home(request:Request):
     s=db();u=user_for(request,s)
     if not u:s.close();return RedirectResponse("/login",303)
     if u.role in ("admin","rh","gestor") and not (u.role=="admin" and request.session.get("learner_view")):
@@ -1311,6 +1390,110 @@ async def save_permissions(request:Request):
             if not row:s.add(RoleModule(role=role,module=module,enabled=enabled))
             else:row.enabled=enabled
     s.commit();s.close();return RedirectResponse("/admin/permissions",303)
+@app.get("/workplace/admin",response_class=HTMLResponse)
+def workplace_admin(request:Request):
+    s=db();u=require(request,s,["admin"])
+    stats={
+        "users":s.query(User).filter_by(active=True).count(),
+        "groups":s.query(UserGroup).count(),
+        "courses":s.query(Course).filter_by(published=True).count(),
+        "processes":s.query(BPMProcess).filter_by(active=True).count(),
+        "notifications":s.query(WorkplaceNotification).count(),
+        "unread":s.query(WorkplaceNotification).filter(WorkplaceNotification.read_at.is_(None)).count()
+    }
+    recent=s.query(AuditLog).order_by(AuditLog.created_at.desc()).limit(8).all()
+    recent_rows=[{"actor":(s.get(User,x.actor_user_id).name if x.actor_user_id and s.get(User,x.actor_user_id) else "Sistema"),"action":x.action,"entity":x.entity_type,"created":x.created_at.strftime("%d/%m/%Y %H:%M")} for x in recent]
+    result=render("workplace_admin.html",user=u,stats=stats,recent=recent_rows)
+    s.close();return result
+
+@app.get("/workplace/notifications",response_class=HTMLResponse)
+def workplace_notifications(request:Request):
+    s=db();u=require(request,s)
+    rows=s.query(WorkplaceNotification).filter((WorkplaceNotification.user_id==None)|(WorkplaceNotification.user_id==u.id)).order_by(WorkplaceNotification.created_at.desc()).limit(100).all()
+    result=render("workplace_notifications.html",user=u,notifications=rows)
+    s.close();return result
+
+@app.post("/workplace/notifications/{notification_id}/read")
+def workplace_notification_read(notification_id:int,request:Request):
+    s=db();u=require(request,s)
+    row=s.get(WorkplaceNotification,notification_id)
+    if not row or (row.user_id is not None and row.user_id!=u.id):
+        s.close();raise HTTPException(404,"Notificação não encontrada.")
+    if row.read_at is None: row.read_at=datetime.utcnow()
+    s.commit();s.close();return RedirectResponse("/workplace/notifications",303)
+
+@app.post("/workplace/notifications/broadcast")
+def workplace_notification_broadcast(request:Request,title:str=Form(...),message:str=Form(...),target_module:str=Form("workplace")):
+    s=db();u=require(request,s,["admin"])
+    title=title.strip();message=message.strip()
+    if not title or not message or len(title)>200 or len(message)>5000:
+        s.close();raise HTTPException(400,"Informe título e mensagem válidos.")
+    allowed={"workplace","academy","bpm","grc","people"}
+    target_module=target_module if target_module in allowed else "workplace"
+    s.add(WorkplaceNotification(user_id=None,title=title,message=message,target_module=target_module,created_by=u.id))
+    audit(s,request,u,"notification.broadcast","workplace_notification","all",f"{title} | módulo: {target_module}")
+    s.commit();s.close();return RedirectResponse("/workplace/admin",303)
+
+@app.get("/bcm",response_class=HTMLResponse)
+def bcm_home(request:Request):
+    s=db();u=require(request,s)
+    bia=s.query(BCMBIA).order_by(BCMBIA.updated_at.desc()).all()
+    plans=s.query(BCMPlan).order_by(BCMPlan.updated_at.desc()).all()
+    counts={"bia":len(bia),"critical":sum(1 for x in bia if x.criticality=="Crítica"),"bcp":sum(1 for x in plans if x.plan_type=="BCP"),"drp":sum(1 for x in plans if x.plan_type=="DRP")}
+    result=render("bcm.html",user=u,bia=bia,plans=plans,counts=counts)
+    s.close();return result
+
+@app.post("/bcm/bia")
+def bcm_create_bia(request:Request,activity:str=Form(...),department:str=Form(""),process_code:str=Form(""),owner:str=Form(""),description:str=Form(""),mtpd_hours:int=Form(0),rto_hours:int=Form(0),rpo_hours:int=Form(0),impact_financial:str=Form("Médio"),impact_operational:str=Form("Médio"),impact_reputation:str=Form("Médio"),dependencies:str=Form(""),resources:str=Form("")):
+    s=db();u=require(request,s,["admin","rh","gestor"])
+    if not activity.strip() or min(mtpd_hours,rto_hours,rpo_hours)<0:
+        s.close();raise HTTPException(400,"Informe a atividade e valores de tempo válidos.")
+    if mtpd_hours and rto_hours>mtpd_hours:
+        s.close();raise HTTPException(400,"O RTO não pode ser maior que o MTPD.")
+    if mtpd_hours and rpo_hours>mtpd_hours:
+        s.close();raise HTTPException(400,"O RPO não pode ser maior que o MTPD.")
+    criticality="Crítica" if mtpd_hours and mtpd_hours<=4 else "Alta" if mtpd_hours and mtpd_hours<=24 else "Média"
+    row=BCMBIA(activity=activity.strip(),department=department.strip(),process_code=process_code.strip(),owner=owner.strip(),description=description.strip(),mtpd_hours=mtpd_hours,rto_hours=rto_hours,rpo_hours=rpo_hours,impact_financial=impact_financial,impact_operational=impact_operational,impact_reputation=impact_reputation,dependencies=dependencies.strip(),resources=resources.strip(),criticality=criticality,created_by=u.id)
+    s.add(row);audit(s,request,u,"bcm.bia.created","bcm_bia",row.activity,"Registro BIA criado");s.commit();s.close()
+    return RedirectResponse("/bcm#bia",303)
+
+@app.post("/bcm/plans")
+async def bcm_upload_plan(request:Request,plan_type:str=Form(...),title:str=Form(...),department:str=Form(""),version:str=Form("1.0"),owner:str=Form(""),summary:str=Form(""),plan_file:UploadFile=File(...)):
+    s=db();u=require(request,s,["admin","rh","gestor"])
+    kind=plan_type.upper()
+    if kind not in ("BCP","DRP"):
+        s.close();raise HTTPException(400,"Tipo de plano inválido.")
+    filename=(plan_file.filename or "").replace("\\","/").split("/")[-1]
+    ext=os.path.splitext(filename)[1].lower()
+    allowed={".pdf":"application/pdf",".docx":"application/vnd.openxmlformats-officedocument.wordprocessingml.document",".doc":"application/msword",".xlsx":"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",".xls":"application/vnd.ms-excel",".pptx":"application/vnd.openxmlformats-officedocument.presentationml.presentation",".ppt":"application/vnd.ms-powerpoint"}
+    if ext not in allowed:
+        s.close();raise HTTPException(400,"Formato não permitido. Utilize PDF, DOC/DOCX, XLS/XLSX ou PPT/PPTX.")
+    data=await plan_file.read()
+    if not data or len(data)>30*1024*1024:
+        s.close();raise HTTPException(400,"O arquivo deve ter até 30 MB.")
+    row=BCMPlan(plan_type=kind,title=title.strip(),department=department.strip(),version=version.strip()[:40],owner=owner.strip(),summary=summary.strip(),filename=filename,mime_type=allowed[ext],file_data=data,created_by=u.id)
+    s.add(row);audit(s,request,u,"bcm.plan.imported","bcm_plan",title.strip(),f"{kind} importado: {filename}");s.commit();s.close()
+    return RedirectResponse("/bcm#plans",303)
+
+@app.get("/bcm/plans/{plan_id}/file")
+def bcm_plan_file(plan_id:int,request:Request,download:int=0):
+    from fastapi.responses import Response
+    s=db();require(request,s);row=s.get(BCMPlan,plan_id)
+    if not row or not row.file_data:s.close();raise HTTPException(404)
+    data=row.file_data;mime=row.mime_type;filename=row.filename;s.close()
+    disposition="attachment" if download else "inline"
+    safe_name=re.sub(r'[^A-Za-z0-9._-]','_',filename)
+    return Response(content=data,media_type=mime,headers={"Content-Disposition":f'{disposition}; filename="{safe_name}"',"X-Content-Type-Options":"nosniff"})
+
+@app.post("/bcm/plans/{plan_id}/status")
+def bcm_plan_status(plan_id:int,request:Request,status:str=Form(...)):
+    s=db();u=require(request,s,["admin","rh","gestor"]);row=s.get(BCMPlan,plan_id)
+    if not row:s.close();raise HTTPException(404)
+    if status not in ("Rascunho","Em revisão","Aprovado","Obsoleto"):
+        s.close();raise HTTPException(400,"Status inválido.")
+    row.status=status;audit(s,request,u,"bcm.plan.status","bcm_plan",row.id,f"Status alterado para {status}")
+    s.commit();s.close();return RedirectResponse("/bcm#plans",303)
+
 @app.get("/directory",response_class=HTMLResponse)
 def directory(request:Request,q:str=""):
     s=db();u=require(request,s);query=s.query(User).filter_by(active=True)

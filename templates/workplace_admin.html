@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="heading"><div><div class="eyebrow">WORKPLACE CORE</div><h1>Administração central</h1><p>Gestão consolidada dos serviços e da operação da plataforma.</p></div><span class="module-state live">Administrador</span></div>
+<div class="workplace-metrics">
+ <article class="workplace-metric"><small>USUÁRIOS ATIVOS</small><strong>{{ stats.users }}</strong><span>Identidades cadastradas</span></article>
+ <article class="workplace-metric"><small>GRUPOS</small><strong>{{ stats.groups }}</strong><span>Grupos de acesso</span></article>
+ <article class="workplace-metric"><small>CURSOS PUBLICADOS</small><strong>{{ stats.courses }}</strong><span>Gertec Academy</span></article>
+ <article class="workplace-metric"><small>PROCESSOS ATIVOS</small><strong>{{ stats.processes }}</strong><span>Gertec BPM</span></article>
+</div>
+<div class="workplace-admin-grid">
+ <section class="workplace-info-card"><div class="eyebrow">IDENTIDADE E ACESSO</div><h3>Administração de usuários</h3><p>Gerencie usuários, grupos e permissões dos módulos corporativos.</p><div class="workplace-admin-links"><a href="/admin/users">Usuários <span>→</span></a><a href="/admin/groups">Grupos e composição <span>→</span></a><a href="/admin/permissions">Matriz de permissões <span>→</span></a></div></section>
+ <section class="workplace-info-card"><div class="eyebrow">COMUNICAÇÃO CORPORATIVA</div><h3>Publicar notificação</h3><p>Envie um comunicado para todos os usuários do Workplace, direcionado a um módulo.</p>
+ <form method="post" action="/workplace/notifications/broadcast" class="workplace-broadcast-form">
+  <label>Título</label><input name="title" maxlength="200" required placeholder="Ex.: Manutenção programada">
+  <label>Mensagem</label><textarea name="message" rows="3" maxlength="5000" required placeholder="Descreva o comunicado..."></textarea>
+  <label>Módulo relacionado</label><select name="target_module"><option value="workplace">Workplace</option><option value="academy">Academy</option><option value="bpm">BPM</option><option value="grc">GRC</option><option value="people">People</option></select>
+  <button class="btn" type="submit">Publicar comunicado</button>
+ </form></section>
+</div>
+<section class="workplace-info-card workplace-audit-card"><div class="eyebrow">RASTREABILIDADE</div><h3>Atividades recentes</h3><p>Últimos registros disponíveis no log de auditoria da plataforma.</p>
+{% if recent %}<div class="table-wrap"><table><thead><tr><th>Data</th><th>Responsável</th><th>Ação</th><th>Objeto</th></tr></thead><tbody>{% for r in recent %}<tr><td>{{ r.created }}</td><td>{{ r.actor }}</td><td>{{ r.action }}</td><td>{{ r.entity }}</td></tr>{% endfor %}</tbody></table></div>{% else %}<p>Nenhuma atividade registrada.</p>{% endif %}
+</section>
+<div class="workplace-admin-footnote">Os módulos Academy e BPM continuam usando suas estruturas de dados atuais. Esta área centraliza os atalhos administrativos e os comunicados; a consolidação das políticas de autorização por módulo será evoluída sem remover as permissões existentes.</div>
+{% endblock %}

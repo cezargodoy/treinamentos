@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="bcm-hero"><div><div class="eyebrow">RESILIÊNCIA ORGANIZACIONAL</div><h1>Gertec BCM</h1><p>Gestão de impacto, continuidade de negócios e recuperação de desastres em um único ambiente.</p></div><span class="bcm-hero-mark">BCM</span></div>
+<div class="workplace-metrics">
+ <article class="workplace-metric"><small>ANÁLISES BIA</small><strong>{{ counts.bia }}</strong><span>Atividades avaliadas</span></article>
+ <article class="workplace-metric"><small>ATIVIDADES CRÍTICAS</small><strong>{{ counts.critical }}</strong><span>Prioridade de recuperação</span></article>
+ <article class="workplace-metric"><small>PLANOS BCP</small><strong>{{ counts.bcp }}</strong><span>Continuidade de negócios</span></article>
+ <article class="workplace-metric"><small>PLANOS DRP</small><strong>{{ counts.drp }}</strong><span>Recuperação de desastres</span></article>
+</div>
+<div class="bcm-tabs"><a href="#bia">BIA</a><a href="#plans">Planos BCP e DRP</a><a href="#framework">Metodologia</a></div>
+<section id="bia" class="bcm-section">
+ <div class="workplace-section-head"><div><div class="eyebrow">BUSINESS IMPACT ANALYSIS</div><h2>Análise de Impacto nos Negócios (BIA)</h2><p>Identifique atividades prioritárias, impactos, dependências e objetivos de recuperação.</p></div></div>
+ <div class="bcm-two-col">
+  <div class="workplace-info-card"><h3>Atividades avaliadas</h3>
+  {% if bia %}<div class="bcm-table-wrap"><table><thead><tr><th>Atividade / processo</th><th>Área</th><th>MTPD</th><th>RTO</th><th>RPO</th><th>Criticidade</th></tr></thead><tbody>{% for x in bia %}<tr><td><b>{{ x.activity }}</b><small class="bcm-sub">{{ x.process_code }} · {{ x.owner }}</small></td><td>{{ x.department }}</td><td>{{ x.mtpd_hours }}h</td><td>{{ x.rto_hours }}h</td><td>{{ x.rpo_hours }}h</td><td><span class="bcm-critical {{ 'critical' if x.criticality=='Crítica' else '' }}">{{ x.criticality }}</span></td></tr>{% endfor %}</tbody></table></div>{% else %}<div class="bcm-empty">Nenhuma análise BIA cadastrada. Inicie pelo formulário ao lado.</div>{% endif %}
+  </div>
+  {% if user.role in ["admin","rh","gestor"] %}
+  <form class="workplace-info-card bcm-form" method="post" action="/bcm/bia"><h3>Nova análise BIA</h3>
+   <label>Atividade ou processo<input name="activity" required maxlength="240" placeholder="Ex.: Processamento de pedidos"></label>
+   <div class="bcm-form-row"><label>Área<input name="department" placeholder="Ex.: Operações"></label><label>Código do processo<input name="process_code" placeholder="Ex.: OPS-001"></label></div>
+   <label>Responsável<input name="owner" placeholder="Dono do processo"></label><label>Descrição<textarea name="description" rows="2"></textarea></label>
+   <div class="bcm-form-row three"><label>MTPD (horas)<input type="number" name="mtpd_hours" min="0" required value="24"></label><label>RTO (horas)<input type="number" name="rto_hours" min="0" required value="8"></label><label>RPO (horas)<input type="number" name="rpo_hours" min="0" required value="4"></label></div>
+   <div class="bcm-form-row"><label>Impacto financeiro<select name="impact_financial"><option>Baixo</option><option selected>Médio</option><option>Alto</option><option>Crítico</option></select></label><label>Impacto operacional<select name="impact_operational"><option>Baixo</option><option selected>Médio</option><option>Alto</option><option>Crítico</option></select></label></div>
+   <label>Impacto reputacional<select name="impact_reputation"><option>Baixo</option><option selected>Médio</option><option>Alto</option><option>Crítico</option></select></label>
+   <label>Dependências internas e externas<textarea name="dependencies" rows="2" placeholder="Pessoas, fornecedores, sistemas, instalações..."></textarea></label><label>Recursos mínimos necessários<textarea name="resources" rows="2"></textarea></label>
+   <button class="btn" type="submit">Registrar análise BIA</button>
+  </form>{% endif %}
+ </div>
+</section>
+<section id="plans" class="bcm-section">
+ <div class="workplace-section-head"><div><div class="eyebrow">CONTINUIDADE E RECUPERAÇÃO</div><h2>Planos BCP e Disaster Recovery</h2><p>Importe planos existentes e mantenha versões, responsáveis e situação documental.</p></div></div>
+ <div class="bcm-two-col">
+  <div class="workplace-info-card"><h3>Repositório de planos</h3>
+  {% for p in plans %}<article class="bcm-plan-row"><div class="bcm-plan-icon">{{ p.plan_type }}</div><div class="bcm-plan-info"><b>{{ p.title }}</b><small>{{ p.department }} · v{{ p.version }} · {{ p.owner }}</small><small>{{ p.filename }}</small><p>{{ p.summary }}</p></div><div class="bcm-plan-actions"><span class="bcm-critical">{{ p.status }}</span><a href="/bcm/plans/{{ p.id }}/file" target="_blank">Visualizar</a><a href="/bcm/plans/{{ p.id }}/file?download=1">Baixar</a>
+   {% if user.role in ["admin","rh","gestor"] %}<form method="post" action="/bcm/plans/{{ p.id }}/status"><select name="status"><option {% if p.status=='Rascunho' %}selected{% endif %}>Rascunho</option><option {% if p.status=='Em revisão' %}selected{% endif %}>Em revisão</option><option {% if p.status=='Aprovado' %}selected{% endif %}>Aprovado</option><option {% if p.status=='Obsoleto' %}selected{% endif %}>Obsoleto</option></select><button class="btn secondary small" type="submit">Atualizar</button></form>{% endif %}
+  </div></article>{% else %}<div class="bcm-empty">Nenhum BCP ou DRP importado.</div>{% endfor %}</div>
+  {% if user.role in ["admin","rh","gestor"] %}<form class="workplace-info-card bcm-form" method="post" enctype="multipart/form-data" action="/bcm/plans"><h3>Importar plano existente</h3>
+   <label>Tipo de plano<select name="plan_type"><option value="BCP">BCP — Business Continuity Plan</option><option value="DRP">DRP — Disaster Recovery Plan</option></select></label>
+   <label>Nome do plano<input name="title" required maxlength="240"></label><div class="bcm-form-row"><label>Área<input name="department"></label><label>Versão<input name="version" value="1.0"></label></div>
+   <label>Responsável<input name="owner"></label><label>Resumo<textarea name="summary" rows="3"></textarea></label>
+   <label>Arquivo do plano<input type="file" name="plan_file" accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx" required></label><small>PDF, Word, Excel ou PowerPoint. Máximo 30 MB por arquivo.</small><button class="btn" type="submit">Importar para o BCM</button>
+  </form>{% endif %}
+ </div>
+</section>
+<section id="framework" class="bcm-section"><div class="workplace-section-head"><div><div class="eyebrow">REFERENCIAL DE GESTÃO</div><h2>Estrutura de continuidade</h2><p>Organização sugerida para evoluir o programa de BCM.</p></div></div>
+ <div class="bcm-framework-grid"><article><span>01</span><h3>BIA</h3><p>Atividades críticas, impactos ao longo do tempo, MTPD, RTO, RPO e dependências.</p></article><article><span>02</span><h3>Estratégias</h3><p>Alternativas de continuidade, recursos mínimos e prioridades de recuperação.</p></article><article><span>03</span><h3>BCP</h3><p>Resposta à interrupção, continuidade operacional, comunicação e retorno controlado.</p></article><article><span>04</span><h3>DRP</h3><p>Recuperação tecnológica, infraestrutura, aplicações, dados, testes e restauração.</p></article><article><span>05</span><h3>Exercícios</h3><p>Testes de mesa, simulações, testes técnicos, lições aprendidas e planos de melhoria.</p></article></div>
+</section>
+{% endblock %}

@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="heading"><div><div class="eyebrow">WORKPLACE CORE</div><h1>Notificações</h1><p>Comunicados e atualizações dos módulos corporativos.</p></div><span class="module-state live">Central de comunicação</span></div>
+<div class="workplace-notification-list">
+{% for n in notifications %}
+ <article class="workplace-notification {% if not n.read_at %}unread{% endif %}">
+  <div class="notification-mark">●</div><div class="notification-content"><div class="notification-meta">{{ n.target_module|upper }} · {{ n.created_at.strftime("%d/%m/%Y %H:%M") }}{% if not n.read_at %} · <b>Não lida</b>{% endif %}</div><h3>{{ n.title }}</h3><p>{{ n.message }}</p></div>
+  {% if not n.read_at %}<form method="post" action="/workplace/notifications/{{ n.id }}/read"><button class="btn secondary" type="submit">Marcar como lida</button></form>{% endif %}
+ </article>
+{% else %}
+ <div class="workplace-info-card"><h3>Nenhuma notificação</h3><p>Quando houver comunicados corporativos, eles aparecerão aqui.</p></div>
+{% endfor %}
+</div>
+{% endblock %}

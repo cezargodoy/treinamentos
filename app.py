@@ -682,6 +682,9 @@ def learn(cid:int,request:Request):
 def update_progress(cid:int,request:Request,progress:int=Form(...)):
     s=db();u=require(request,s);e=s.query(Enrollment).filter_by(user_id=u.id,course_id=cid).first()
     if not e:s.close();raise HTTPException(403)
+    c=s.get(Course,cid)
+    is_direct_video=bool(c and c.sharepoint_url and any(ext in c.sharepoint_url.lower().split("?")[0] for ext in (".mp4",".webm",".ogg")))
+    if is_direct_video:s.close();raise HTTPException(403,"O progresso deste vídeo é registrado automaticamente pelo player.")
     if progress<1 or progress>99:s.close();raise HTTPException(400,"Progresso deve estar entre 1 e 99.")
     e.progress=max(e.progress,progress);e.started_at=e.started_at or datetime.utcnow();e.last_activity=datetime.utcnow();e.status="Em andamento";s.commit();s.close();return RedirectResponse(f"/learn/{cid}",303)
 @app.post("/api/learning/events")
@@ -689,7 +692,9 @@ async def learning_event(request:Request):
     s=db();u=require(request,s)
     try: payload=await request.json()
     except Exception: s.close();raise HTTPException(400,"Evento inválido.")
-    try: cid=int(payload.get("course_id")); position=max(0,int(payload.get("position_seconds",0))); delta=max(0,min(30,int(payload.get("delta_seconds",0))))
+    try:
+        cid=int(payload.get("course_id")); position=max(0,int(payload.get("position_seconds",0))); delta=max(0,min(30,int(payload.get("delta_seconds",0))))
+        reported_duration=max(0,min(14400,int(payload.get("duration_seconds",0))))
     except (TypeError,ValueError): s.close();raise HTTPException(400,"Dados de tracking inválidos.")
     event_type=str(payload.get("event_type","heartbeat"))[:40]
     if event_type not in {"play","pause","heartbeat","ended","seek","visibility_hidden"}: s.close();raise HTTPException(400,"Tipo de evento inválido.")
@@ -701,7 +706,8 @@ async def learning_event(request:Request):
     s.add(LearningEvent(enrollment_id=e.id,user_id=u.id,course_id=cid,event_type=event_type,position_seconds=position,delta_seconds=delta))
     if c.duration_minutes>0:
         e.progress=max(e.progress,min(99,int(e.watched_seconds/(c.duration_minutes*60)*100)))
-    if event_type=="ended" and c.duration_minutes>0 and e.watched_seconds >= int(c.duration_minutes*60*0.9):
+    required_watch_seconds=int((reported_duration or c.duration_minutes*60)*0.9)
+    if event_type=="ended" and required_watch_seconds>0 and e.watched_seconds >= required_watch_seconds:
         e.progress=100;e.status="Concluído";e.completed_at=now
         if e.campaign_id:
             issue_campaign_certificate_if_complete(s,u.id,e.campaign_id)
@@ -713,6 +719,9 @@ async def learning_event(request:Request):
 def complete(cid:int,request:Request):
     s=db();u=require(request,s);e=s.query(Enrollment).filter_by(user_id=u.id,course_id=cid).first()
     if not e:s.close();raise HTTPException(403)
+    c=s.get(Course,cid)
+    is_direct_video=bool(c and c.sharepoint_url and any(ext in c.sharepoint_url.lower().split("?")[0] for ext in (".mp4",".webm",".ogg")))
+    if is_direct_video and e.status!="Concluído":s.close();raise HTTPException(403,"A conclusão deste vídeo é automática; assista ao conteúdo até o final.")
     e.progress=100;e.status="Concluído";e.completed_at=datetime.utcnow();e.started_at=e.started_at or e.enrolled_at;e.last_activity=datetime.utcnow()
     if e.campaign_id:
         issue_campaign_certificate_if_complete(s,u.id,e.campaign_id)

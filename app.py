@@ -509,6 +509,16 @@ def require(request,s,roles=None):
     return u
 def render(name,**ctx):
     ctx.setdefault("app_language", get_setting("language","pt-BR"))
+    # Define o shell de navegação pelo template renderizado. Nem todas as rotas
+    # antigas passam o objeto Request ao helper; não depender de request no Jinja.
+    academy_templates = {
+        "dashboard.html", "courses.html", "learn.html", "campaigns.html",
+        "campaign_edit.html", "reports.html", "certificates.html",
+        "directory.html", "forum.html", "profile.html", "users.html",
+        "user_edit.html", "groups.html", "permissions.html", "audit.html",
+        "communications.html", "settings.html", "setup.html"
+    }
+    ctx.setdefault("academy_mode", name in academy_templates)
     return HTMLResponse(templates.get_template(name).render(**ctx))
 def audit(s, request, actor, action, entity_type, entity_id="", details=""):
     ip=request.client.host if request.client else ""

@@ -1,9 +1,19 @@
+# Build the BPMN editor assets once and bundle them into the application image.
+# At runtime, browsers load all BPMN files from the Gertec Academy origin.
+FROM node:20-alpine AS bpmn-assets
+WORKDIR /build
+RUN npm pack bpmn-js@17.11.1 \
+    && mkdir -p /bpmn \
+    && tar -xzf bpmn-js-17.11.1.tgz -C /bpmn --strip-components=1
+
 FROM python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 APP_ENV=production
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
+# Vendor bpmn-js and its styles locally: no browser request to unpkg.com.
+COPY --from=bpmn-assets /bpmn/dist/ /app/static/vendor/bpmn-js/
 RUN python - <<'PYCODE'
 import pathlib, urllib.request
 font_dir = pathlib.Path("/app/static/fonts")

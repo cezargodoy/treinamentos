@@ -167,3 +167,6 @@ a.workplace-module-card:hover{transform:translateY(-2px);box-shadow:0 10px 25px 
 .bcm-framework-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px}.bcm-framework-grid article{background:#fff;border:1px solid #e0e7ef;border-radius:12px;padding:16px}.bcm-framework-grid article>span{font-size:10px;color:#6e83a0;font-weight:900}.bcm-framework-grid h3{font-size:15px;color:#19385f;margin:10px 0 5px}.bcm-framework-grid p{font-size:11px;line-height:1.55;color:#78879a;margin:0}
 @media(max-width:1050px){.bcm-two-col{grid-template-columns:1fr}.bcm-framework-grid{grid-template-columns:repeat(2,1fr)}}
 @media(max-width:650px){.bcm-form-row,.bcm-form-row.three{grid-template-columns:1fr}.bcm-framework-grid{grid-template-columns:1fr}.bcm-hero{padding:22px}.bcm-plan-row{flex-wrap:wrap}.bcm-plan-actions{width:100%;padding-left:50px}}
+
+/* GRC / BCM module enhancements */
+.bcm-plan-row form{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px}.bcm-plan-row form select{max-width:190px}.bcm-form input[type="url"],.bcm-form input[type="date"]{width:100%}.bcm-section{scroll-margin-top:24px}

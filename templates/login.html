@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="pt-br"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Entrar | Gertec Academy</title><link rel="stylesheet" href="/static/style.css"></head>
-<body class="auth-page"><main class="auth-shell"><section class="auth-card"><div class="auth-brand"><div class="brand-mark">G</div><div><strong>GERTEC <span>ACADEMY</span></strong><small>UNIVERSIDADE CORPORATIVA</small></div></div><div class="auth-intro"><span class="eyebrow">BEM-VINDO(A)</span><h1>Acesse sua plataforma</h1><p>Entre para continuar seus treinamentos e acompanhar seu desenvolvimento.</p></div>
+<html lang="pt-br"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Entrar | Gertec Workplace</title><link rel="stylesheet" href="/static/style.css"></head>
+<body class="auth-page"><main class="auth-shell"><section class="auth-card"><div class="auth-brand"><div class="brand-mark">G</div><div><strong>GERTEC <span>WORKPLACE</span></strong><small>AMBIENTE DIGITAL CORPORATIVO</small></div></div><div class="auth-intro"><span class="eyebrow">BEM-VINDO(A)</span><h1>Acesse sua plataforma</h1><p>Entre para acessar os módulos e serviços corporativos da Gertec.</p></div>
 {% if message %}<div class="auth-alert">{{ message }}</div>{% endif %}
 <form method="post" action="/login" class="auth-form"><label>E-mail corporativo ou cadastrado<input type="email" name="email" placeholder="nome@gertec.com.br" required autocomplete="username"></label><label>Senha<input type="password" name="password" placeholder="Digite sua senha" required autocomplete="current-password"></label><button class="btn auth-submit" type="submit">Entrar na plataforma</button></form>
 <div class="auth-divider"><span>OU</span></div>
 {% if entra_enabled %}<a class="entra-button" href="/login/entra"><span class="ms-mark"><i></i><i></i><i></i><i></i></span> Entrar com Microsoft (SSO)</a>{% else %}<div class="entra-disabled">Acesso Microsoft (SSO) poderá ser habilitado posteriormente.</div>{% endif %}
 {% if not has_users %}<p class="auth-foot">Primeiro acesso? <a href="/setup">Configurar conta administradora</a></p>{% else %}<p class="auth-foot">Em caso de dificuldade, entre em contato com o RH ou administrador da plataforma.</p>{% endif %}
-</section><footer class="auth-footer">GERTEC ACADEMY <span>•</span> Ambiente de aprendizagem corporativa</footer></main></body></html>
+</section><footer class="auth-footer">GERTEC WORKPLACE <span>•</span> Ambiente digital corporativo</footer></main></body></html>

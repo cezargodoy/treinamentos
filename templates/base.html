@@ -1,69 +1,14 @@
-<!doctype html>
-<html lang="{{ app_language|default('pt-BR') }}">
-<head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{{ title or ('Gertec Academy' if request.url.path in ['/academy','/courses','/campaigns','/reports','/certificates','/directory','/forum','/profile','/admin/users','/admin/groups','/admin/permissions','/admin/audit','/admin/settings','/setup'] else 'Gertec Workplace') }}</title>
-<link rel="stylesheet" href="/static/style.css">
-</head>
-<body>
+<!doctype html><html lang="{{ app_language|default('pt-BR') }}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{{ title or 'Gertec Workplace' }}</title><link rel="stylesheet" href="/static/style.css"></head><body>
 {% set academy_mode = request.url.path in ['/academy','/courses','/campaigns','/reports','/certificates','/directory','/forum','/profile','/admin/users','/admin/groups','/admin/permissions','/admin/audit','/admin/settings','/setup'] %}
-<aside class="sidebar {% if not academy_mode %}workplace-sidebar{% endif %}">
-  {% if academy_mode %}
-  <a class="brand" href="/academy"><span class="mark">G</span><span>GERTEC <b>ACADEMY</b><small>UNIVERSIDADE CORPORATIVA</small></span></a>
-  <div class="nav-scroll">
-    <div class="navtitle">{% if app_language=='en-US' %}NAVIGATION{% elif app_language=='es-ES' %}NAVEGACIÓN{% else %}NAVEGAÇÃO{% endif %}</div>
-    <a href="/">▦　Voltar ao Workplace</a>
-    <a href="/academy">▦　Painel inicial</a>
-    <a href="/courses">▤　Biblioteca de conteúdo</a>
-    <a href="/campaigns">◈　Campanhas de aprendizagem</a>
-    <a href="/reports">▥　Relatórios e indicadores</a>
-    <a href="/bpm">⌘　Gertec BPM</a>
-    {% if user.role in ["admin", "rh"] %}
-    <a href="/admin/users">♙　Usuários</a><a href="/admin/groups">◉　Grupos</a>
-    {% endif %}
-    {% if user.role == "admin" %}
-    <a href="/admin/permissions">⚙　Permissões</a><a href="/admin/audit">▤　Auditoria</a>
-    {% endif %}
-    <a href="/directory">♧　Pessoas</a><a href="/forum">▤　Fórum</a>
-    <a href="https://giga-quizzes.com/home" target="_blank" rel="noopener">🎮　Gamificação ↗</a>
-    <a href="/profile">◉　Meu perfil</a><a href="/certificates">♧　Certificados</a>
-    {% if user.role == "admin" %}<a href="/admin/settings">⚙　Configurações gerais</a>{% endif %}
-  </div>
-  {% else %}
-  <a class="brand workplace-brand" href="/"><span class="mark">G</span><span>GERTEC <b>WORKPLACE</b><small>AMBIENTE DIGITAL CORPORATIVO</small></span></a>
-  <div class="nav-scroll">
-    <div class="navtitle">AMBIENTE CORPORATIVO</div>
-    <a href="/">▦　Workplace</a>
-    <a href="/workplace/notifications">♧　Notificações</a>
-    <div class="workplace-nav-label">MÓDULOS</div>
-    <a href="/academy">▤　Gertec Academy</a>
-    <a href="/bpm">⌘　Gertec BPM</a>
-    <a href="/bcm">▦　Gertec BCM</a>
-    <span class="nav-disabled">◈　Gertec GRC <small>Em implantação</small></span>
-    <span class="nav-disabled">♙　Gertec People <small>Planejado</small></span>
-    <span class="nav-disabled">▧　Knowledge <small>Planejado</small></span>
-    <span class="nav-disabled">▥　Analytics <small>Planejado</small></span>
-    <div class="workplace-nav-label">GESTÃO DA PLATAFORMA</div>
-    {% if user.role == "admin" %}<a href="/workplace/admin">⚙　Administração central</a>{% endif %}
-    <div class="workplace-nav-label">ORGANIZAÇÃO</div>
-    <a href="/directory">Pessoas</a><a href="/forum">Fórum</a>
-    {% if user.role in ["admin", "rh"] %}<a href="/admin/users">Usuários</a><a href="/admin/groups">Grupos</a>{% endif %}
-    {% if user.role == "admin" %}<a href="/admin/permissions">Permissões</a><a href="/admin/audit">Auditoria</a><a href="/admin/settings">Configurações</a>{% endif %}
-    <a href="https://giga-quizzes.com/home" target="_blank" rel="noopener">🎮　Gamificação ↗</a><a href="/profile">◉　Meu perfil</a>
-  </div>
-  {% endif %}
-  <div class="profile">
-    {% if user.photo_path %}<img class="avatar" src="{{user.photo_path}}">{% else %}<span class="avatar">{{ user.name[:1] }}</span>{% endif %}
-    <span><b>{{ user.name }}</b><small>{{ user.role|capitalize }}</small></span>
-    <a href="/logout">Encerrar sessão</a>
-  </div>
-</aside>
-<main class="main">
-  {% if academy_mode %}
-  <header class="top"><span>Gertec Academy　/　{{ title or 'Painel inicial' }}</span><span class="status">● Ambiente corporativo seguro</span></header>
-  {% else %}
-  <header class="top"><span>Gertec Workplace　/　{{ title or 'Painel central' }}</span><span class="status">● Ambiente corporativo integrado</span></header>
-  {% endif %}
-  <div class="content">{% block content %}{% endblock %}</div>
-</main>
-</body></html>
+{% if academy_mode %}<aside class="sidebar"><a class="brand" href="/"><span class="mark">G</span><span>GERTEC <b>ACADEMY</b><small>UNIVERSIDADE CORPORATIVA</small></span></a><div class="nav-scroll"><div class="navtitle">{% if app_language=='en-US' %}NAVIGATION{% elif app_language=='es-ES' %}NAVEGACIÓN{% else %}NAVEGAÇÃO{% endif %}</div><a href="/academy">▦　{% if app_language=='en-US' %}Home dashboard{% elif app_language=='es-ES' %}Panel inicial{% else %}Painel inicial{% endif %}</a><a href="/">▦　Voltar ao Workplace</a><a href="/courses">▤　{% if app_language=='en-US' %}Content library{% elif app_language=='es-ES' %}Biblioteca de contenido{% else %}Biblioteca de conteúdo{% endif %}</a><a href="/campaigns">◈　{% if app_language=='en-US' %}Learning campaigns{% elif app_language=='es-ES' %}Campañas de aprendizaje{% else %}Campanhas de aprendizagem{% endif %}</a><a href="/reports">▥　{% if app_language=='en-US' %}Reports and indicators{% elif app_language=='es-ES' %}Informes e indicadores{% else %}Relatórios e indicadores{% endif %}</a><a href="/bpm">⌘　Gertec BPM</a>{% if user.role in ["admin", "rh"] %}<a href="/admin/users">♙　{% if app_language=='en-US' %}Users{% elif app_language=='es-ES' %}Usuarios{% else %}Usuários{% endif %}</a><a href="/admin/groups">◉　{% if app_language=='en-US' %}Groups{% elif app_language=='es-ES' %}Grupos{% else %}Grupos{% endif %}</a>{% endif %}{% if user.role == "admin" %}<a href="/admin/permissions">⚙　Permissões</a><a href="/admin/audit">▤　Auditoria</a>{% endif %}<a href="/directory">♧　Pessoas</a><a href="/forum">▤　Fórum</a><a href="https://giga-quizzes.com/home" target="_blank" rel="noopener">🎮　Gamificação ↗</a><a href="/profile">◉　Meu perfil</a><a href="/certificates">♧　Certificados</a>{% if user.role == "admin" %}<a href="/admin/settings">⚙　{% if app_language=='en-US' %}General settings{% elif app_language=='es-ES' %}Configuración general{% else %}Configurações gerais{% endif %}</a>{% endif %}</div><div class="profile">{% if user.photo_path %}<img class="avatar" src="{{user.photo_path}}">{% else %}<span class="avatar">{{ user.name[:1] }}</span>{% endif %}<span><b>{{ user.name }}</b><small>{{ user.role|capitalize }}</small></span><a href="/logout">Encerrar sessão</a></div></aside>{% else %}<aside class="sidebar workplace-sidebar">
+<a class="brand workplace-brand" href="/"><span class="mark">G</span><span>GERTEC <b>WORKPLACE</b><small>AMBIENTE DIGITAL CORPORATIVO</small></span></a>
+<div class="nav-scroll"><div class="navtitle">AMBIENTE CORPORATIVO</div><a href="/">▦　Workplace</a><a href="/workplace/notifications">♧　Notificações</a>
+<div class="workplace-nav-label">MÓDULOS</div><a href="/academy">▤　Gertec Academy</a><a href="/bpm">⌘　Gertec BPM</a><a href="/bcm">▦　Gertec BCM</a>
+<a href="/grc">◈　Gertec GRC</a><span class="nav-disabled">♙　Gertec People <small>Planejado</small></span><span class="nav-disabled">▧　Knowledge <small>Planejado</small></span><span class="nav-disabled">▥　Analytics <small>Planejado</small></span>
+<div class="workplace-nav-label">GESTÃO DA PLATAFORMA</div>{% if user.role == "admin" %}<a href="/workplace/admin">⚙　Administração central</a>{% endif %}
+<div class="workplace-nav-label">ORGANIZAÇÃO</div><a href="/directory">Pessoas</a><a href="/forum">Fórum</a>
+{% if user.role in ["admin", "rh"] %}<a href="/admin/users">Usuários</a><a href="/admin/groups">Grupos</a>{% endif %}
+{% if user.role == "admin" %}<a href="/admin/permissions">Permissões</a><a href="/admin/audit">Auditoria</a><a href="/admin/settings">Configurações</a>{% endif %}
+<a href="https://giga-quizzes.com/home" target="_blank" rel="noopener">🎮　Gamificação ↗</a><a href="/profile">◉　Meu perfil</a></div>
+<div class="profile">{% if user.photo_path %}<img class="avatar" src="{{user.photo_path}}">{% else %}<span class="avatar">{{ user.name[:1] }}</span>{% endif %}<span><b>{{ user.name }}</b><small>{{ user.role|capitalize }}</small></span><a href="/logout">Encerrar sessão</a></div></aside>{% endif %}
+<main class="main"><header class="top">{% if academy_mode %}<span>Gertec Academy　/　{{ title or 'Painel inicial' }}</span><span class="status">● Ambiente corporativo seguro</span>{% else %}<span>Gertec Workplace　/　{{ title or 'Painel central' }}</span><span class="status">● Ambiente corporativo integrado</span>{% endif %}</header><div class="content">{% block content %}{% endblock %}</div></main></body></html>

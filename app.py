@@ -299,6 +299,113 @@ class BCMPlan(Base):
     created_at:Mapped[datetime]=mapped_column(DateTime,default=datetime.utcnow)
     updated_at:Mapped[datetime]=mapped_column(DateTime,default=datetime.utcnow,onupdate=datetime.utcnow)
 
+
+class GRCRisk(Base):
+    __tablename__="grc_risks"
+    id:Mapped[int]=mapped_column(primary_key=True)
+    code:Mapped[str]=mapped_column(String(30),unique=True,index=True)
+    title:Mapped[str]=mapped_column(String(240),index=True)
+    category:Mapped[str]=mapped_column(String(100),default="Operacional")
+    department:Mapped[str]=mapped_column(String(160),default="")
+    owner:Mapped[str]=mapped_column(String(180),default="")
+    description:Mapped[str]=mapped_column(Text,default="")
+    likelihood:Mapped[int]=mapped_column(Integer,default=3)
+    impact:Mapped[int]=mapped_column(Integer,default=3)
+    inherent_score:Mapped[int]=mapped_column(Integer,default=9)
+    treatment:Mapped[str]=mapped_column(String(40),default="Mitigar")
+    response:Mapped[str]=mapped_column(Text,default="")
+    residual_score:Mapped[int]=mapped_column(Integer,default=0)
+    status:Mapped[str]=mapped_column(String(30),default="Aberto")
+    due_date:Mapped[str]=mapped_column(String(20),default="")
+    created_by:Mapped[int|None]=mapped_column(ForeignKey("users.id"),nullable=True)
+    created_at:Mapped[datetime]=mapped_column(DateTime,default=datetime.utcnow)
+    updated_at:Mapped[datetime]=mapped_column(DateTime,default=datetime.utcnow,onupdate=datetime.utcnow)
+
+class GRCControl(Base):
+    __tablename__="grc_controls"
+    id:Mapped[int]=mapped_column(primary_key=True)
+    code:Mapped[str]=mapped_column(String(50),index=True)
+    framework:Mapped[str]=mapped_column(String(100),default="ISO/IEC 27001:2022")
+    title:Mapped[str]=mapped_column(String(240))
+    description:Mapped[str]=mapped_column(Text,default="")
+    owner_area:Mapped[str]=mapped_column(String(160),default="")
+    applicability:Mapped[str]=mapped_column(String(30),default="Aplicável")
+    implementation:Mapped[str]=mapped_column(String(40),default="Não avaliado")
+    evidence_url:Mapped[str]=mapped_column(Text,default="")
+    notes:Mapped[str]=mapped_column(Text,default="")
+    updated_at:Mapped[datetime]=mapped_column(DateTime,default=datetime.utcnow,onupdate=datetime.utcnow)
+
+class GRCFinding(Base):
+    __tablename__="grc_findings"
+    id:Mapped[int]=mapped_column(primary_key=True)
+    code:Mapped[str]=mapped_column(String(30),unique=True,index=True)
+    title:Mapped[str]=mapped_column(String(240))
+    source:Mapped[str]=mapped_column(String(100),default="Auditoria interna")
+    severity:Mapped[str]=mapped_column(String(30),default="Média")
+    department:Mapped[str]=mapped_column(String(160),default="")
+    owner:Mapped[str]=mapped_column(String(180),default="")
+    description:Mapped[str]=mapped_column(Text,default="")
+    action_plan:Mapped[str]=mapped_column(Text,default="")
+    due_date:Mapped[str]=mapped_column(String(20),default="")
+    status:Mapped[str]=mapped_column(String(30),default="Aberta")
+    created_by:Mapped[int|None]=mapped_column(ForeignKey("users.id"),nullable=True)
+    created_at:Mapped[datetime]=mapped_column(DateTime,default=datetime.utcnow)
+
+class BCMResource(Base):
+    __tablename__="bcm_resources"
+    id:Mapped[int]=mapped_column(primary_key=True)
+    name:Mapped[str]=mapped_column(String(240))
+    resource_type:Mapped[str]=mapped_column(String(80),default="Sistema")
+    department:Mapped[str]=mapped_column(String(160),default="")
+    owner:Mapped[str]=mapped_column(String(180),default="")
+    criticality:Mapped[str]=mapped_column(String(30),default="Alta")
+    rto_hours:Mapped[int]=mapped_column(Integer,default=8)
+    rpo_hours:Mapped[int]=mapped_column(Integer,default=4)
+    supplier:Mapped[str]=mapped_column(String(200),default="")
+    dependencies:Mapped[str]=mapped_column(Text,default="")
+    recovery_procedure:Mapped[str]=mapped_column(Text,default="")
+    status:Mapped[str]=mapped_column(String(30),default="Ativo")
+    created_at:Mapped[datetime]=mapped_column(DateTime,default=datetime.utcnow)
+
+class BCMExercise(Base):
+    __tablename__="bcm_exercises"
+    id:Mapped[int]=mapped_column(primary_key=True)
+    title:Mapped[str]=mapped_column(String(240))
+    exercise_type:Mapped[str]=mapped_column(String(80),default="Tabletop")
+    scope:Mapped[str]=mapped_column(Text,default="")
+    planned_date:Mapped[str]=mapped_column(String(20),default="")
+    actual_date:Mapped[str]=mapped_column(String(20),default="")
+    coordinator:Mapped[str]=mapped_column(String(180),default="")
+    result:Mapped[str]=mapped_column(String(40),default="Planejado")
+    lessons_learned:Mapped[str]=mapped_column(Text,default="")
+    actions:Mapped[str]=mapped_column(Text,default="")
+    created_by:Mapped[int|None]=mapped_column(ForeignKey("users.id"),nullable=True)
+    created_at:Mapped[datetime]=mapped_column(DateTime,default=datetime.utcnow)
+
+
+
+class GRCRiskProcessLink(Base):
+    __tablename__="grc_risk_process_links"
+    id:Mapped[int]=mapped_column(primary_key=True)
+    risk_id:Mapped[int]=mapped_column(ForeignKey("grc_risks.id",ondelete="CASCADE"),index=True)
+    process_id:Mapped[int]=mapped_column(ForeignKey("bpm_processes.id",ondelete="CASCADE"),index=True)
+    created_at:Mapped[datetime]=mapped_column(DateTime,default=datetime.utcnow)
+
+class GRCRiskControlLink(Base):
+    __tablename__="grc_risk_control_links"
+    id:Mapped[int]=mapped_column(primary_key=True)
+    risk_id:Mapped[int]=mapped_column(ForeignKey("grc_risks.id",ondelete="CASCADE"),index=True)
+    control_id:Mapped[int]=mapped_column(ForeignKey("grc_controls.id",ondelete="CASCADE"),index=True)
+    created_at:Mapped[datetime]=mapped_column(DateTime,default=datetime.utcnow)
+
+class BCMProcessLink(Base):
+    __tablename__="bcm_process_links"
+    id:Mapped[int]=mapped_column(primary_key=True)
+    bia_id:Mapped[int]=mapped_column(ForeignKey("bcm_bia.id",ondelete="CASCADE"),index=True)
+    process_id:Mapped[int]=mapped_column(ForeignKey("bpm_processes.id",ondelete="CASCADE"),index=True)
+    created_at:Mapped[datetime]=mapped_column(DateTime,default=datetime.utcnow)
+
+
 Base.metadata.create_all(engine)
 # Compatibilidade com bancos criados por versões anteriores do MVP.
 from sqlalchemy import inspect, text
@@ -1439,8 +1546,14 @@ def bcm_home(request:Request):
     s=db();u=require(request,s)
     bia=s.query(BCMBIA).order_by(BCMBIA.updated_at.desc()).all()
     plans=s.query(BCMPlan).order_by(BCMPlan.updated_at.desc()).all()
+    resources=s.query(BCMResource).order_by(BCMResource.name).all()
+    exercises=s.query(BCMExercise).order_by(BCMExercise.created_at.desc()).all()
+    processes=s.query(BPMProcess).filter_by(active=True).order_by(BPMProcess.code).all()
+    process_links=s.query(BCMProcessLink).all()
+    process_map={x.id:x for x in processes}
+    linked_processes={x.id:[process_map[l.process_id] for l in process_links if l.bia_id==x.id and l.process_id in process_map] for x in bia}
     counts={"bia":len(bia),"critical":sum(1 for x in bia if x.criticality=="Crítica"),"bcp":sum(1 for x in plans if x.plan_type=="BCP"),"drp":sum(1 for x in plans if x.plan_type=="DRP")}
-    result=render("bcm.html",user=u,bia=bia,plans=plans,counts=counts)
+    result=render("bcm.html",user=u,bia=bia,plans=plans,resources=resources,exercises=exercises,counts=counts,processes=processes,linked_processes=linked_processes)
     s.close();return result
 
 @app.post("/bcm/bia")
@@ -1493,6 +1606,121 @@ def bcm_plan_status(plan_id:int,request:Request,status:str=Form(...)):
         s.close();raise HTTPException(400,"Status inválido.")
     row.status=status;audit(s,request,u,"bcm.plan.status","bcm_plan",row.id,f"Status alterado para {status}")
     s.commit();s.close();return RedirectResponse("/bcm#plans",303)
+
+
+@app.get("/grc",response_class=HTMLResponse)
+def grc_home(request:Request):
+    s=db();u=require(request,s)
+    risks=s.query(GRCRisk).order_by(GRCRisk.updated_at.desc()).all()
+    controls=s.query(GRCControl).order_by(GRCControl.framework,GRCControl.code).all()
+    findings=s.query(GRCFinding).order_by(GRCFinding.created_at.desc()).all()
+    processes=s.query(BPMProcess).filter_by(active=True).order_by(BPMProcess.code).all()
+    risk_process_links=s.query(GRCRiskProcessLink).all()
+    risk_control_links=s.query(GRCRiskControlLink).all()
+    process_map={x.id:x for x in processes}; control_map={x.id:x for x in controls}
+    linked_processes={r.id:[process_map[x.process_id] for x in risk_process_links if x.risk_id==r.id and x.process_id in process_map] for r in risks}
+    linked_controls={r.id:[control_map[x.control_id] for x in risk_control_links if x.risk_id==r.id and x.control_id in control_map] for r in risks}
+    counts={"risks":len(risks),"high":sum(1 for r in risks if r.inherent_score>=15 and r.status!="Encerrado"),"controls":len(controls),"findings":sum(1 for f in findings if f.status!="Concluída")}
+    result=render("grc.html",user=u,risks=risks,controls=controls,findings=findings,counts=counts,processes=processes,linked_processes=linked_processes,linked_controls=linked_controls)
+    s.close();return result
+
+@app.post("/grc/risks")
+def grc_create_risk(request:Request,title:str=Form(...),category:str=Form("Operacional"),department:str=Form(""),owner:str=Form(""),description:str=Form(""),likelihood:int=Form(3),impact:int=Form(3),treatment:str=Form("Mitigar"),response:str=Form(""),residual_score:int=Form(0),due_date:str=Form("")):
+    s=db();u=require(request,s,["admin","rh","gestor"])
+    if not title.strip() or not (1<=likelihood<=5 and 1<=impact<=5) or not (0<=residual_score<=25):
+        s.close();raise HTTPException(400,"Revise título e escalas de risco (1 a 5).")
+    code=f"RSK-{datetime.utcnow():%y%m%d}-{secrets.token_hex(2).upper()}"
+    row=GRCRisk(code=code,title=title.strip(),category=category,department=department.strip(),owner=owner.strip(),description=description.strip(),likelihood=likelihood,impact=impact,inherent_score=likelihood*impact,treatment=treatment,response=response.strip(),residual_score=residual_score,due_date=due_date,created_by=u.id)
+    s.add(row);audit(s,request,u,"grc.risk.created","grc_risk",code,title.strip());s.commit();s.close()
+    return RedirectResponse("/grc#risks",303)
+
+@app.post("/grc/risks/{risk_id}/status")
+def grc_risk_status(risk_id:int,request:Request,status:str=Form(...)):
+    s=db();u=require(request,s,["admin","rh","gestor"]);row=s.get(GRCRisk,risk_id)
+    if not row:s.close();raise HTTPException(404)
+    if status not in ("Aberto","Em tratamento","Aceito","Encerrado"):s.close();raise HTTPException(400)
+    row.status=status;audit(s,request,u,"grc.risk.status","grc_risk",row.code,status);s.commit();s.close()
+    return RedirectResponse("/grc#risks",303)
+
+@app.post("/grc/controls")
+def grc_create_control(request:Request,code:str=Form(...),framework:str=Form("ISO/IEC 27001:2022"),title:str=Form(...),description:str=Form(""),owner_area:str=Form(""),applicability:str=Form("Aplicável"),implementation:str=Form("Não avaliado"),evidence_url:str=Form(""),notes:str=Form("")):
+    s=db();u=require(request,s,["admin","rh","gestor"])
+    if not code.strip() or not title.strip():s.close();raise HTTPException(400,"Código e requisito são obrigatórios.")
+    row=GRCControl(code=code.strip(),framework=framework,title=title.strip(),description=description.strip(),owner_area=owner_area.strip(),applicability=applicability,implementation=implementation,evidence_url=evidence_url.strip(),notes=notes.strip())
+    s.add(row);audit(s,request,u,"grc.control.created","grc_control",code,title);s.commit();s.close()
+    return RedirectResponse("/grc#controls",303)
+
+@app.post("/grc/findings")
+def grc_create_finding(request:Request,title:str=Form(...),source:str=Form("Auditoria interna"),severity:str=Form("Média"),department:str=Form(""),owner:str=Form(""),description:str=Form(""),action_plan:str=Form(""),due_date:str=Form("")):
+    s=db();u=require(request,s,["admin","rh","gestor"])
+    if not title.strip():s.close();raise HTTPException(400,"Informe o título do apontamento.")
+    code=f"NC-{datetime.utcnow():%y%m%d}-{secrets.token_hex(2).upper()}"
+    row=GRCFinding(code=code,title=title.strip(),source=source,severity=severity,department=department.strip(),owner=owner.strip(),description=description.strip(),action_plan=action_plan.strip(),due_date=due_date,created_by=u.id)
+    s.add(row);audit(s,request,u,"grc.finding.created","grc_finding",code,title);s.commit();s.close()
+    return RedirectResponse("/grc#findings",303)
+
+@app.post("/grc/findings/{finding_id}/status")
+def grc_finding_status(finding_id:int,request:Request,status:str=Form(...)):
+    s=db();u=require(request,s,["admin","rh","gestor"]);row=s.get(GRCFinding,finding_id)
+    if not row:s.close();raise HTTPException(404)
+    if status not in ("Aberta","Em andamento","Aguardando validação","Concluída"):s.close();raise HTTPException(400)
+    row.status=status;audit(s,request,u,"grc.finding.status","grc_finding",row.code,status);s.commit();s.close()
+    return RedirectResponse("/grc#findings",303)
+
+@app.post("/bcm/resources")
+def bcm_create_resource(request:Request,name:str=Form(...),resource_type:str=Form("Sistema"),department:str=Form(""),owner:str=Form(""),criticality:str=Form("Alta"),rto_hours:int=Form(8),rpo_hours:int=Form(4),supplier:str=Form(""),dependencies:str=Form(""),recovery_procedure:str=Form("")):
+    s=db();u=require(request,s,["admin","rh","gestor"])
+    if not name.strip() or min(rto_hours,rpo_hours)<0:s.close();raise HTTPException(400,"Informe recurso e tempos válidos.")
+    row=BCMResource(name=name.strip(),resource_type=resource_type,department=department.strip(),owner=owner.strip(),criticality=criticality,rto_hours=rto_hours,rpo_hours=rpo_hours,supplier=supplier.strip(),dependencies=dependencies.strip(),recovery_procedure=recovery_procedure.strip())
+    s.add(row);audit(s,request,u,"bcm.resource.created","bcm_resource",name,"Dependência/recurso de continuidade cadastrado");s.commit();s.close()
+    return RedirectResponse("/bcm#resources",303)
+
+@app.post("/bcm/exercises")
+def bcm_create_exercise(request:Request,title:str=Form(...),exercise_type:str=Form("Tabletop"),scope:str=Form(""),planned_date:str=Form(""),coordinator:str=Form(""),actions:str=Form("")):
+    s=db();u=require(request,s,["admin","rh","gestor"])
+    if not title.strip():s.close();raise HTTPException(400,"Informe o nome do exercício.")
+    row=BCMExercise(title=title.strip(),exercise_type=exercise_type,scope=scope.strip(),planned_date=planned_date,coordinator=coordinator.strip(),actions=actions.strip(),created_by=u.id)
+    s.add(row);audit(s,request,u,"bcm.exercise.created","bcm_exercise",title,"Exercício de continuidade registrado");s.commit();s.close()
+    return RedirectResponse("/bcm#exercises",303)
+
+
+
+@app.post("/grc/risks/{risk_id}/link-process")
+def grc_link_process(risk_id:int,request:Request,process_id:int=Form(...)):
+    s=db();u=require(request,s,["admin","rh","gestor"])
+    if not s.get(GRCRisk,risk_id) or not s.get(BPMProcess,process_id):
+        s.close();raise HTTPException(404,"Risco ou processo não encontrado.")
+    exists=s.query(GRCRiskProcessLink).filter_by(risk_id=risk_id,process_id=process_id).first()
+    if not exists:
+        s.add(GRCRiskProcessLink(risk_id=risk_id,process_id=process_id))
+        audit(s,request,u,"grc.risk.process.linked","grc_risk",risk_id,f"Processo BPM {process_id}")
+        s.commit()
+    s.close();return RedirectResponse("/grc#risks",303)
+
+@app.post("/grc/risks/{risk_id}/link-control")
+def grc_link_control(risk_id:int,request:Request,control_id:int=Form(...)):
+    s=db();u=require(request,s,["admin","rh","gestor"])
+    if not s.get(GRCRisk,risk_id) or not s.get(GRCControl,control_id):
+        s.close();raise HTTPException(404,"Risco ou controle não encontrado.")
+    exists=s.query(GRCRiskControlLink).filter_by(risk_id=risk_id,control_id=control_id).first()
+    if not exists:
+        s.add(GRCRiskControlLink(risk_id=risk_id,control_id=control_id))
+        audit(s,request,u,"grc.risk.control.linked","grc_risk",risk_id,f"Controle {control_id}")
+        s.commit()
+    s.close();return RedirectResponse("/grc#risks",303)
+
+@app.post("/bcm/bia/{bia_id}/link-process")
+def bcm_link_process(bia_id:int,request:Request,process_id:int=Form(...)):
+    s=db();u=require(request,s,["admin","rh","gestor"])
+    if not s.get(BCMBIA,bia_id) or not s.get(BPMProcess,process_id):
+        s.close();raise HTTPException(404,"BIA ou processo não encontrado.")
+    exists=s.query(BCMProcessLink).filter_by(bia_id=bia_id,process_id=process_id).first()
+    if not exists:
+        s.add(BCMProcessLink(bia_id=bia_id,process_id=process_id))
+        audit(s,request,u,"bcm.bia.process.linked","bcm_bia",bia_id,f"Processo BPM {process_id}")
+        s.commit()
+    s.close();return RedirectResponse("/bcm#bia",303)
+
 
 @app.get("/directory",response_class=HTMLResponse)
 def directory(request:Request,q:str=""):

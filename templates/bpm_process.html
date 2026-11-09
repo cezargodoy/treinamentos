@@ -2,14 +2,88 @@
 {% block content %}
 <div class="bpm-page bpm-detail-page">
   <div class="bpm-breadcrumb"><a href="/bpm">Cadeia de valor</a><span>›</span>{% if parent %}<a href="/bpm">{{ parent.name }}</a><span>›</span>{% endif %}<b>{{ item.name }}</b></div>
-  <div class="bpm-detail-hero"><div><div class="eyebrow">{{ item.category }} · {{ item.code }}</div><h1>{{ item.name }}</h1><p>{{ item.description or 'Detalhamento do processo e estruturação das atividades operacionais.' }}</p></div><span class="bpm-status">{{ item.status }}</span></div>
-  <div class="bpm-detail-stats"><div><small>TIPO</small><strong>{{ item.process_type }}</strong></div><div><small>ÁREA RESPONSÁVEL</small><strong>{{ item.owner_area or 'A definir' }}</strong></div><div><small>SUBPROCESSOS / ETAPAS</small><strong>{{ children|length }}</strong></div><div><small>MODELAGEM</small><strong>Em preparação</strong></div></div>
-  <div class="bpm-section-head"><div><div class="eyebrow">DECOMPOSIÇÃO DO PROCESSO</div><h2>Subprocessos e atividades</h2><p>Esta estrutura será usada para desenhar o fluxo, atribuir responsáveis e configurar as regras de execução.</p></div></div>
-  {% if children %}<div class="bpm-process-list bpm-detail-list">{% for child in children %}<a class="bpm-process" href="/bpm/process/{{ child.id }}"><span class="bpm-process-code">{{ child.code }}</span><strong>{{ child.name }}</strong><span class="bpm-process-arrow">→</span></a>{% endfor %}</div>{% else %}<div class="bpm-empty"><span>◇</span><h3>Estrutura pronta para detalhamento</h3><p>Adicione subprocessos para decompor este processo em etapas operacionais.</p></div>{% endif %}
-  {% if user.role in ["admin", "rh", "gestor"] %}
-  <div class="bpm-add-panel"><div><div class="eyebrow">EXPANSÃO DA HIERARQUIA</div><h3>Adicionar subprocesso ou etapa</h3><p>Inclua novos níveis de detalhamento sem alterar a estrutura já cadastrada.</p></div><form method="post" action="/bpm/process" class="bpm-add-form"><input type="hidden" name="parent_id" value="{{ item.id }}"><input type="hidden" name="category" value="{{ item.category }}"><input type="hidden" name="process_type" value="Subprocesso"><input name="name" required maxlength="240" placeholder="Nome do subprocesso ou etapa"><input name="owner_area" maxlength="160" placeholder="Área responsável (opcional)"><button class="btn" type="submit">Adicionar</button></form></div>
-  {% endif %}
-  <div class="bpm-next-grid"><div class="bpm-next-card"><span>01</span><h3>Modelagem BPMN</h3><p>Desenhe eventos, tarefas, decisões, raias e conexões do fluxo.</p><small>Próxima etapa do desenvolvimento</small></div><div class="bpm-next-card"><span>02</span><h3>Playbooks</h3><p>Vincule procedimentos, checklists, documentos e critérios de execução.</p><small>Próxima etapa do desenvolvimento</small></div><div class="bpm-next-card"><span>03</span><h3>Indicadores e SLA</h3><p>Acompanhe prazos, responsáveis, gargalos e desempenho operacional.</p><small>Próxima etapa do desenvolvimento</small></div></div>
+  <div class="bpm-detail-hero"><div><div class="eyebrow">{{ item.category }} · {{ item.code }}</div><h1>{{ item.name }}</h1><p>{{ item.description or 'Ambiente de documentação, aprendizagem e modelagem do processo.' }}</p></div><span class="bpm-status">{{ item.status }}</span></div>
+  <div class="bpm-detail-stats"><div><small>TIPO</small><strong>{{ item.process_type }}</strong></div><div><small>ÁREA RESPONSÁVEL</small><strong>{{ item.owner_area or 'A definir' }}</strong></div><div><small>SUBPROCESSOS / ETAPAS</small><strong>{{ children|length }}</strong></div><div><small>MODELAGEM</small><strong>{{ 'Diagrama salvo' if model_exists else 'Não modelado' }}</strong></div></div>
+
+  <div class="bpm-tabs">
+    <a href="#estrutura">Estrutura</a><a href="#documentacao">Documentação <span>{{ documents|length }}</span></a><a href="#aprendizagem">Trilha de aprendizagem <span>{{ training_links|length }}</span></a><a href="#modelagem">Modelagem visual</a>
+  </div>
+
+  <section id="estrutura" class="bpm-module-section">
+    <div class="bpm-section-head"><div><div class="eyebrow">DECOMPOSIÇÃO DO PROCESSO</div><h2>Subprocessos e atividades</h2><p>Explore os níveis operacionais e organize a sequência de execução.</p></div></div>
+    {% if children %}<div class="bpm-process-list bpm-detail-list">{% for child in children %}<a class="bpm-process" href="/bpm/process/{{ child.id }}"><span class="bpm-process-code">{{ child.code }}</span><strong>{{ child.name }}</strong><span class="bpm-process-arrow">→</span></a>{% endfor %}</div>{% else %}<div class="bpm-empty"><span>◇</span><h3>Estrutura pronta para detalhamento</h3><p>Adicione subprocessos para decompor este processo em etapas operacionais.</p></div>{% endif %}
+    {% if user.role in ["admin", "rh", "gestor"] %}
+    <div class="bpm-add-panel"><div><div class="eyebrow">EXPANSÃO DA HIERARQUIA</div><h3>Adicionar subprocesso ou etapa</h3><p>Inclua novos níveis de detalhamento sem alterar a estrutura já cadastrada.</p></div><form method="post" action="/bpm/process" class="bpm-add-form"><input type="hidden" name="parent_id" value="{{ item.id }}"><input type="hidden" name="category" value="{{ item.category }}"><input type="hidden" name="process_type" value="Subprocesso"><input name="name" required maxlength="240" placeholder="Nome do subprocesso ou etapa"><input name="owner_area" maxlength="160" placeholder="Área responsável (opcional)"><button class="btn" type="submit">Adicionar</button></form></div>
+    {% endif %}
+  </section>
+
+  <section id="documentacao" class="bpm-module-section">
+    <div class="bpm-section-head"><div><div class="eyebrow">REPOSITÓRIO DO PROCESSO</div><h2>Documentação e procedimentos</h2><p>Centralize PDFs de procedimentos, políticas, instruções de trabalho, formulários e documentos de referência deste processo.</p></div></div>
+    <div class="bpm-resource-grid">
+      <div class="bpm-resource-list">
+        {% for doc in documents %}
+        <article class="bpm-resource"><div class="bpm-file-icon">PDF</div><div class="bpm-resource-info"><strong>{{ doc.title }}</strong><small>{{ doc.filename }} · {{ (doc.created_at|string)[:16] }} · {{ doc.uploaded_by }}</small>{% if doc.description %}<p>{{ doc.description }}</p>{% endif %}</div><div class="bpm-resource-actions"><a class="btn secondary small" href="/bpm/documents/{{ doc.id }}" target="_blank">Visualizar</a><a class="bpm-text-link" href="/bpm/documents/{{ doc.id }}?download=1">Baixar</a></div></article>
+        {% else %}<div class="bpm-empty compact"><span>▤</span><h3>Nenhum documento vinculado</h3><p>Adicione o procedimento oficial e os materiais de apoio do processo.</p></div>{% endfor %}
+      </div>
+      {% if user.role in ["admin","rh","gestor"] %}
+      <form class="bpm-upload-card" method="post" enctype="multipart/form-data" action="/bpm/process/{{ item.id }}/documents">
+        <h3>Adicionar documento PDF</h3><label>Título do documento<input name="title" required maxlength="240" placeholder="Ex.: IT-SUP-001 — Homologação de fornecedores"></label>
+        <label>Descrição <textarea name="description" rows="3" placeholder="Objetivo, escopo e observações"></textarea></label>
+        <label>Arquivo PDF<input type="file" name="pdf_file" accept="application/pdf,.pdf" required></label>
+        <small>PDF até 25 MB. O arquivo será armazenado no banco corporativo.</small><button class="btn" type="submit">Enviar documento</button>
+      </form>
+      {% endif %}
+    </div>
+  </section>
+
+  <section id="aprendizagem" class="bpm-module-section">
+    <div class="bpm-section-head"><div><div class="eyebrow">CAPACITAÇÃO OPERACIONAL</div><h2>Trilha de aprendizagem</h2><p>Associe cursos do Gertec Academy ou treinamentos externos para preparar quem executa este processo.</p></div></div>
+    <div class="bpm-learning-list">
+      {% for link in training_links %}
+      <article class="bpm-learning-card"><div class="bpm-learning-symbol">▶</div><div class="bpm-resource-info"><strong>{{ link.title }}</strong><p>{{ link.description or (link.course.description if link.course else 'Conteúdo de aprendizagem vinculado ao processo.') }}</p><small>{% if link.course %}Curso do Gertec Academy · {{ link.course.duration_minutes }} minutos{% else %}Conteúdo externo{% endif %}</small></div><a class="btn secondary small" href="{{ '/learn/' ~ link.course_id if link.course else link.external_url }}" {% if not link.course %}target="_blank" rel="noopener"{% endif %}>Acessar trilha ↗</a>
+      {% if user.role in ["admin","rh","gestor"] %}<form method="post" action="/bpm/training/{{ link.id }}/delete" onsubmit="return confirm('Remover este vínculo?')"><button class="bpm-icon-button" title="Remover">×</button></form>{% endif %}</article>
+      {% else %}<div class="bpm-empty compact"><span>▶</span><h3>Nenhuma trilha vinculada</h3><p>Monte uma trilha com cursos obrigatórios e materiais complementares.</p></div>{% endfor %}
+    </div>
+    {% if user.role in ["admin","rh","gestor"] %}
+    <form class="bpm-add-panel bpm-training-form" method="post" action="/bpm/process/{{ item.id }}/training">
+      <div><div class="eyebrow">VINCULAR CONTEÚDO</div><h3>Adicionar à trilha</h3><p>Selecione um curso publicado no Academy ou informe um link HTTPS.</p></div>
+      <div class="bpm-training-fields"><label>Nome da etapa<input name="title" required placeholder="Ex.: Fundamentos de homologação"></label><label>Curso do Academy<select name="course_id"><option value="">Selecione um curso (opcional)</option>{% for course in courses %}<option value="{{ course.id }}">{{ course.title }}</option>{% endfor %}</select></label><label>Link externo HTTPS (opcional)<input name="external_url" type="url" placeholder="https://..."></label><label>Descrição<textarea name="description" rows="2" placeholder="Objetivo e conclusão esperada"></textarea></label><button class="btn" type="submit">Vincular conteúdo</button></div>
+    </form>
+    {% endif %}
+  </section>
+
+  <section id="modelagem" class="bpm-module-section">
+    <div class="bpm-section-head"><div><div class="eyebrow">DESENHO DO PROCESSO</div><h2>Modelagem visual BPMN 2.0</h2><p>Editor embarcado para desenhar eventos, tarefas, gateways, raias e conexões, com experiência semelhante a uma ferramenta de diagramação profissional.</p></div><span class="bpm-model-status" id="modelStatus">{{ 'Diagrama salvo' if model_exists else 'Novo diagrama' }}</span></div>
+    <div class="bpm-modeler-toolbar"><button type="button" class="btn secondary small" id="bpmnImport">Importar BPMN</button><button type="button" class="btn secondary small" id="bpmnExport">Exportar BPMN</button><button type="button" class="btn secondary small" id="bpmnFit">Ajustar à tela</button>{% if user.role in ["admin","rh","gestor"] %}<button type="button" class="btn small" id="bpmnSave">Salvar diagrama</button>{% endif %}<input type="file" id="bpmnFile" accept=".bpmn,.xml" hidden></div>
+    <div class="bpm-modeler-shell"><div id="bpmnCanvas" aria-label="Editor visual de processos BPMN"></div><div id="bpmnError" class="bpm-modeler-error" hidden></div></div>
+    <p class="bpm-modeler-note">Use a paleta lateral para inserir elementos e conecte-os para formar o fluxo. O diagrama é salvo como BPMN 2.0 e pode ser exportado para reutilização.</p>
+  </section>
   <a class="btn secondary" href="/bpm">← Voltar à cadeia de valor</a>
 </div>
+<link rel="stylesheet" href="https://unpkg.com/bpmn-js@17.11.1/dist/assets/diagram-js.css">
+<link rel="stylesheet" href="https://unpkg.com/bpmn-js@17.11.1/dist/assets/bpmn-js.css">
+<link rel="stylesheet" href="https://unpkg.com/bpmn-js@17.11.1/dist/assets/bpmn-font/css/bpmn.css">
+<script src="https://unpkg.com/bpmn-js@17.11.1/dist/bpmn-modeler.development.js"></script>
+<script>
+(function(){
+ const canvas=document.getElementById('bpmnCanvas'), errorBox=document.getElementById('bpmnError');
+ if(!canvas)return;
+ if(!window.BpmnJS){errorBox.hidden=false;errorBox.textContent='Não foi possível carregar o editor BPMN. Verifique o acesso à biblioteca externa.';return;}
+ const modeler=new BpmnJS({container:'#bpmnCanvas',keyboard:{bindTo:document}});
+ const defaultXml=`<?xml version="1.0" encoding="UTF-8"?><bpmn:definitions xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI" xmlns:dc="http://www.omg.org/spec/DD/20100524/DC" xmlns:di="http://www.omg.org/spec/DD/20100524/DI" id="Definitions_1" targetNamespace="http://bpmn.io/schema/bpmn"><bpmn:process id="Process_1" name="{{ item.name|e }}" isExecutable="false"><bpmn:startEvent id="StartEvent_1" name="Início"><bpmn:outgoing>Flow_1</bpmn:outgoing></bpmn:startEvent><bpmn:task id="Task_1" name="Nova atividade"><bpmn:incoming>Flow_1</bpmn:incoming><bpmn:outgoing>Flow_2</bpmn:outgoing></bpmn:task><bpmn:endEvent id="EndEvent_1" name="Término"><bpmn:incoming>Flow_2</bpmn:incoming></bpmn:endEvent><bpmn:sequenceFlow id="Flow_1" sourceRef="StartEvent_1" targetRef="Task_1"/><bpmn:sequenceFlow id="Flow_2" sourceRef="Task_1" targetRef="EndEvent_1"/></bpmn:process><bpmndi:BPMNDiagram id="BPMNDiagram_1"><bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="Process_1"><bpmndi:BPMNShape id="StartEvent_1_di" bpmnElement="StartEvent_1"><dc:Bounds x="180" y="160" width="36" height="36"/></bpmndi:BPMNShape><bpmndi:BPMNShape id="Task_1_di" bpmnElement="Task_1"><dc:Bounds x="280" y="138" width="100" height="80"/></bpmndi:BPMNShape><bpmndi:BPMNShape id="EndEvent_1_di" bpmnElement="EndEvent_1"><dc:Bounds x="450" y="160" width="36" height="36"/></bpmndi:BPMNShape><bpmndi:BPMNEdge id="Flow_1_di" bpmnElement="Flow_1"><di:waypoint x="216" y="178"/><di:waypoint x="280" y="178"/></bpmndi:BPMNEdge><bpmndi:BPMNEdge id="Flow_2_di" bpmnElement="Flow_2"><di:waypoint x="380" y="178"/><di:waypoint x="450" y="178"/></bpmndi:BPMNEdge></bpmndi:BPMNPlane></bpmndi:BPMNDiagram></bpmn:definitions>`;
+ async function load(){
+   try{const r=await fetch('/bpm/process/{{ item.id }}/model');const d=await r.json();await modeler.importXML(d.xml||defaultXml);modeler.get('canvas').zoom('fit-viewport');}
+   catch(e){errorBox.hidden=false;errorBox.textContent='Erro ao abrir o diagrama: '+e.message;}
+ }
+ load();
+ document.getElementById('bpmnFit').onclick=()=>modeler.get('canvas').zoom('fit-viewport');
+ document.getElementById('bpmnExport').onclick=async()=>{const {xml}=await modeler.saveXML({format:true});const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([xml],{type:'application/xml'}));a.download='{{ item.code }}.bpmn';a.click();URL.revokeObjectURL(a.href);};
+ const fileInput=document.getElementById('bpmnFile');
+ document.getElementById('bpmnImport').onclick=()=>fileInput.click();
+ fileInput.onchange=async()=>{const f=fileInput.files[0];if(!f)return;try{await modeler.importXML(await f.text());modeler.get('canvas').zoom('fit-viewport');document.getElementById('modelStatus').textContent='Alterações não salvas';}catch(e){errorBox.hidden=false;errorBox.textContent='Arquivo BPMN inválido: '+e.message;}};
+ const save=document.getElementById('bpmnSave');
+ if(save)save.onclick=async()=>{save.disabled=true;try{const {xml}=await modeler.saveXML({format:true});const body=new FormData();body.append('bpmn_xml',xml);const r=await fetch('/bpm/process/{{ item.id }}/model',{method:'POST',body});const d=await r.json();if(!r.ok)throw new Error(d.detail||'Falha ao salvar');document.getElementById('modelStatus').textContent='Salvo agora';}catch(e){errorBox.hidden=false;errorBox.textContent=e.message;}finally{save.disabled=false;}};
+ modeler.on('commandStack.changed',()=>{document.getElementById('modelStatus').textContent='Alterações não salvas';});
+})();
+</script>
 {% endblock %}

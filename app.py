@@ -67,6 +67,37 @@ class BPMProcess(Base):
     created_at:Mapped[datetime]=mapped_column(DateTime,default=datetime.utcnow)
     updated_at:Mapped[datetime]=mapped_column(DateTime,default=datetime.utcnow,onupdate=datetime.utcnow)
 
+class BPMDocument(Base):
+    __tablename__="bpm_documents"
+    id:Mapped[int]=mapped_column(primary_key=True)
+    process_id:Mapped[int]=mapped_column(ForeignKey("bpm_processes.id",ondelete="CASCADE"),index=True)
+    title:Mapped[str]=mapped_column(String(240))
+    description:Mapped[str]=mapped_column(Text,default="")
+    filename:Mapped[str]=mapped_column(String(240))
+    mime_type:Mapped[str]=mapped_column(String(80),default="application/pdf")
+    file_data:Mapped[bytes]=mapped_column(LargeBinary)
+    uploaded_by:Mapped[str]=mapped_column(String(180),default="")
+    created_at:Mapped[datetime]=mapped_column(DateTime,default=datetime.utcnow)
+
+class BPMTrainingLink(Base):
+    __tablename__="bpm_training_links"
+    id:Mapped[int]=mapped_column(primary_key=True)
+    process_id:Mapped[int]=mapped_column(ForeignKey("bpm_processes.id",ondelete="CASCADE"),index=True)
+    course_id:Mapped[int|None]=mapped_column(ForeignKey("courses.id"),nullable=True)
+    title:Mapped[str]=mapped_column(String(240))
+    description:Mapped[str]=mapped_column(Text,default="")
+    external_url:Mapped[str]=mapped_column(Text,default="")
+    sort_order:Mapped[int]=mapped_column(Integer,default=0)
+    created_at:Mapped[datetime]=mapped_column(DateTime,default=datetime.utcnow)
+
+class BPMModel(Base):
+    __tablename__="bpm_models"
+    id:Mapped[int]=mapped_column(primary_key=True)
+    process_id:Mapped[int]=mapped_column(ForeignKey("bpm_processes.id",ondelete="CASCADE"),unique=True,index=True)
+    bpmn_xml:Mapped[str]=mapped_column(Text,default="")
+    updated_by:Mapped[str]=mapped_column(String(180),default="")
+    updated_at:Mapped[datetime]=mapped_column(DateTime,default=datetime.utcnow,onupdate=datetime.utcnow)
+
 class Course(Base):
     __tablename__="courses"
     id:Mapped[int]=mapped_column(primary_key=True)
@@ -389,7 +420,13 @@ def bpm_process_detail(process_id:int,request:Request):
         if not item or not item.active: raise HTTPException(404,"Processo não encontrado")
         parent=s.get(BPMProcess,item.parent_id) if item.parent_id else None
         children=s.query(BPMProcess).filter_by(parent_id=item.id,active=True).order_by(BPMProcess.sort_order).all()
-        return render("bpm_process.html",request=request,user=u,title=item.name,item=item,parent=parent,children=children)
+        documents=s.query(BPMDocument).filter_by(process_id=item.id).order_by(BPMDocument.created_at.desc()).all()
+        training_links=s.query(BPMTrainingLink).filter_by(process_id=item.id).order_by(BPMTrainingLink.sort_order).all()
+        for link in training_links:
+            link.course=s.get(Course,link.course_id) if link.course_id else None
+        courses=s.query(Course).filter_by(published=True).order_by(Course.title).all()
+        model=s.query(BPMModel).filter_by(process_id=item.id).first()
+        return render("bpm_process.html",request=request,user=u,title=item.name,item=item,parent=parent,children=children,documents=documents,training_links=training_links,courses=courses,model_exists=bool(model))
     finally:s.close()
 
 @app.post("/bpm/process")
@@ -407,6 +444,93 @@ def bpm_create_process(request:Request,parent_id:int|None=Form(None),name:str=Fo
         item=BPMProcess(parent_id=parent_id,code=code,name=name,category=category,process_type=process_type,owner_area=owner_area,description=description,sort_order=count)
         s.add(item);s.flush();audit(s,request,u,"bpm_process_created","BPMProcess",item.id,name);s.commit()
         return RedirectResponse(f"/bpm/process/{item.id}",303)
+    finally:s.close()
+
+@app.post("/bpm/process/{process_id}/documents")
+async def bpm_upload_document(process_id:int,request:Request,title:str=Form(...),description:str=Form(""),pdf_file:UploadFile=File(...)):
+    s=db()
+    try:
+        u=require(request,s,["admin","rh","gestor"])
+        item=s.get(BPMProcess,process_id)
+        if not item or not item.active: raise HTTPException(404,"Processo não encontrado")
+        filename=(pdf_file.filename or "documento.pdf").replace("\\\\","/").split("/")[-1][:240]
+        data=await pdf_file.read()
+        if not data or len(data)>25*1024*1024: raise HTTPException(400,"O PDF deve ter até 25 MB.")
+        if not data.startswith(b"%PDF-"): raise HTTPException(400,"Envie um arquivo PDF válido.")
+        doc=BPMDocument(process_id=process_id,title=title.strip(),description=description.strip(),filename=filename,mime_type="application/pdf",file_data=data,uploaded_by=u.name)
+        s.add(doc); s.flush(); audit(s,request,u,"bpm_document_uploaded","BPMDocument",doc.id,filename); s.commit()
+        return RedirectResponse(f"/bpm/process/{process_id}#documentacao",303)
+    finally: s.close()
+
+@app.get("/bpm/documents/{document_id}")
+def bpm_download_document(document_id:int,request:Request,download:int=0):
+    s=db()
+    try:
+        u=require(request,s)
+        doc=s.get(BPMDocument,document_id)
+        if not doc: raise HTTPException(404,"Documento não encontrado")
+        disposition="attachment" if download else "inline"
+        safe_name=doc.filename.replace('"',"")
+        return StreamingResponse(io.BytesIO(doc.file_data),media_type="application/pdf",headers={"Content-Disposition":f'{disposition}; filename="{safe_name}"',"X-Content-Type-Options":"nosniff"})
+    finally: s.close()
+
+@app.post("/bpm/process/{process_id}/training")
+def bpm_add_training(process_id:int,request:Request,title:str=Form(...),description:str=Form(""),course_id:int|None=Form(None),external_url:str=Form("")):
+    s=db()
+    try:
+        u=require(request,s,["admin","rh","gestor"])
+        item=s.get(BPMProcess,process_id)
+        if not item or not item.active: raise HTTPException(404,"Processo não encontrado")
+        course=s.get(Course,course_id) if course_id else None
+        if course_id and not course: raise HTTPException(404,"Curso não encontrado")
+        if external_url and not re.match(r"^https://",external_url.strip(),re.I): raise HTTPException(400,"O link externo deve utilizar HTTPS.")
+        if not course and not external_url.strip(): raise HTTPException(400,"Selecione um curso ou informe um link HTTPS.")
+        link=BPMTrainingLink(process_id=process_id,course_id=course.id if course else None,title=title.strip() or (course.title if course else "Trilha"),description=description.strip(),external_url=external_url.strip(),sort_order=s.query(BPMTrainingLink).filter_by(process_id=process_id).count()+1)
+        s.add(link); s.flush(); audit(s,request,u,"bpm_training_linked","BPMTrainingLink",link.id,link.title); s.commit()
+        return RedirectResponse(f"/bpm/process/{process_id}#aprendizagem",303)
+    finally: s.close()
+
+@app.post("/bpm/training/{link_id}/delete")
+def bpm_delete_training(link_id:int,request:Request):
+    s=db()
+    try:
+        u=require(request,s,["admin","rh","gestor"])
+        link=s.get(BPMTrainingLink,link_id)
+        if not link: raise HTTPException(404,"Vínculo não encontrado")
+        process_id=link.process_id
+        audit(s,request,u,"bpm_training_unlinked","BPMTrainingLink",link.id,link.title)
+        s.delete(link);s.commit()
+        return RedirectResponse(f"/bpm/process/{process_id}#aprendizagem",303)
+    finally:s.close()
+
+@app.get("/bpm/process/{process_id}/model")
+def bpm_get_model(process_id:int,request:Request):
+    s=db()
+    try:
+        u=require(request,s)
+        item=s.get(BPMProcess,process_id)
+        if not item or not item.active: raise HTTPException(404,"Processo não encontrado")
+        model=s.query(BPMModel).filter_by(process_id=process_id).first()
+        if model: return {"xml":model.bpmn_xml,"updated_at":model.updated_at.isoformat() if model.updated_at else ""}
+        return {"xml":""}
+    finally:s.close()
+
+@app.post("/bpm/process/{process_id}/model")
+def bpm_save_model(process_id:int,request:Request,bpmn_xml:str=Form(...)):
+    s=db()
+    try:
+        u=require(request,s,["admin","rh","gestor"])
+        item=s.get(BPMProcess,process_id)
+        if not item or not item.active: raise HTTPException(404,"Processo não encontrado")
+        if len(bpmn_xml)>2_000_000: raise HTTPException(413,"O diagrama excede o limite de 2 MB.")
+        if "<definitions" not in bpmn_xml or "bpmn" not in bpmn_xml[:1000].lower(): raise HTTPException(400,"O conteúdo não parece ser um diagrama BPMN válido.")
+        model=s.query(BPMModel).filter_by(process_id=process_id).first()
+        if not model:
+            model=BPMModel(process_id=process_id,bpmn_xml=bpmn_xml,updated_by=u.name);s.add(model)
+        else:
+            model.bpmn_xml=bpmn_xml;model.updated_by=u.name;model.updated_at=datetime.utcnow()
+        audit(s,request,u,"bpm_model_saved","BPMModel",process_id,item.name);s.commit()
+        return {"ok":True,"message":"Modelo BPMN salvo com sucesso.","updated_at":model.updated_at.isoformat()}
     finally:s.close()
 
 @app.get("/health")

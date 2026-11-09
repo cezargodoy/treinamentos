@@ -261,7 +261,6 @@ app.add_middleware(SessionMiddleware,secret_key=os.getenv("SECRET_KEY","developm
 os.makedirs("static/uploads",exist_ok=True)
 app.mount("/static",StaticFiles(directory="static"),name="static")
 templates=Environment(loader=FileSystemLoader("templates"),autoescape=select_autoescape(["html"]))
-seed_bpm_processes()
 oauth=OAuth()
 tenant=os.getenv("ENTRA_TENANT_ID","")
 client_id=os.getenv("ENTRA_CLIENT_ID","")
@@ -363,6 +362,11 @@ def seed_bpm_processes():
         s.commit()
     finally:
         s.close()
+
+# A carga inicial precisa ocorrer somente depois da definição da função.
+# A chamada anterior à definição causava NameError durante a importação do app.
+seed_bpm_processes()
+
 @app.get("/bpm",response_class=HTMLResponse)
 def bpm_home(request:Request):
     s=db()

@@ -83,6 +83,12 @@ class CampaignRole(Base):
     id:Mapped[int]=mapped_column(primary_key=True)
     campaign_id:Mapped[int]=mapped_column(ForeignKey("campaigns.id"))
     role:Mapped[str]=mapped_column(String(30))
+class CampaignGroup(Base):
+    __tablename__="campaign_groups"
+    id:Mapped[int]=mapped_column(primary_key=True)
+    campaign_id:Mapped[int]=mapped_column(ForeignKey("campaigns.id"))
+    group_id:Mapped[int]=mapped_column(ForeignKey("user_groups.id"))
+    __table_args__=(UniqueConstraint("campaign_id","group_id"),)
 class CampaignCourse(Base):
     __tablename__="campaign_courses"
     id:Mapped[int]=mapped_column(primary_key=True)
@@ -529,8 +535,10 @@ def add_campaign(request:Request,title:str=Form(...),description:str=Form(""),av
         s.close();raise HTTPException(400,"Selecione pelo menos um conteúdo para compor a trilha.")
     if start and end and end<=start: s.close();raise HTTPException(400,"O encerramento deve ser posterior à disponibilidade inicial.")
     c=Campaign(title=title,description=description,available_from=start,available_until=end,duration_hours=max(1,(duration_minutes+59)//60),duration_text=duration_label);s.add(c);s.flush()
-    valid_roles={"colaborador","gestor","rh","admin"};roles=[r for r in roles if r in valid_roles]
+    valid_roles={"colaborador","gestor","rh","admin"};roles=sorted({r for r in roles if r in valid_roles})
+    group_ids=sorted({gid for gid in group_ids if s.get(UserGroup,gid)})
     for role in roles:s.add(CampaignRole(campaign_id=c.id,role=role))
+    for gid in group_ids:s.add(CampaignGroup(campaign_id=c.id,group_id=gid))
     for cid in course_ids:
         if s.get(Course,cid):s.add(CampaignCourse(campaign_id=c.id,course_id=cid))
     target_ids=set()
@@ -541,15 +549,15 @@ def add_campaign(request:Request,title:str=Form(...),description:str=Form(""),av
         if s.get(Course,cid):
             for uid in target_ids:
                 if not s.query(Enrollment).filter_by(user_id=uid,course_id=cid,campaign_id=c.id).first():s.add(Enrollment(user_id=uid,course_id=cid,campaign_id=c.id))
-    audit(s,request,user_for(request,s),"campaign.created","campaign",c.id,f"Cursos={len(course_ids)}; perfis={','.join(roles)}")
+    audit(s,request,user_for(request,s),"campaign.created","campaign",c.id,f"Cursos={len(course_ids)}; perfis={','.join(roles)}; grupos={','.join(map(str,group_ids))}")
     s.commit();s.close();return RedirectResponse("/campaigns",303)
 @app.get("/campaigns/{campaign_id}/edit",response_class=HTMLResponse)
 def campaign_edit_page(campaign_id:int,request:Request):
     s=db();actor=require(request,s,["admin"]);c=s.get(Campaign,campaign_id)
     if not c:s.close();raise HTTPException(404)
-    result=render("campaign_edit.html",user=actor,campaign=c,courses=s.query(Course).all(),selected_courses=[x.course_id for x in s.query(CampaignCourse).filter_by(campaign_id=c.id)],selected_roles=[x.role for x in s.query(CampaignRole).filter_by(campaign_id=c.id)],roles=["colaborador","gestor","rh","admin"]);s.close();return result
+    result=render("campaign_edit.html",user=actor,campaign=c,courses=s.query(Course).all(),groups=s.query(UserGroup).order_by(UserGroup.name).all(),selected_courses=[x.course_id for x in s.query(CampaignCourse).filter_by(campaign_id=c.id)],selected_roles=[x.role for x in s.query(CampaignRole).filter_by(campaign_id=c.id)],selected_groups=[x.group_id for x in s.query(CampaignGroup).filter_by(campaign_id=c.id)],roles=["colaborador","gestor","rh","admin"]);s.close();return result
 @app.post("/campaigns/{campaign_id}/edit")
-def campaign_edit(campaign_id:int,request:Request,title:str=Form(...),description:str=Form(""),available_from:str=Form(""),available_until:str=Form(""),duration_hours:str=Form("1h"),active:str=Form(""),course_ids:list[int]=Form([]),roles:list[str]=Form([])):
+def campaign_edit(campaign_id:int,request:Request,title:str=Form(...),description:str=Form(""),available_from:str=Form(""),available_until:str=Form(""),duration_hours:str=Form("1h"),active:str=Form(""),course_ids:list[int]=Form([]),group_ids:list[int]=Form([]),roles:list[str]=Form([])):
     s=db();require(request,s,["admin"]);c=s.get(Campaign,campaign_id)
     if not c:s.close();raise HTTPException(404)
     duration_minutes,duration_label=parse_duration_label(duration_hours)
@@ -557,12 +565,30 @@ def campaign_edit(campaign_id:int,request:Request,title:str=Form(...),descriptio
     except ValueError:s.close();raise HTTPException(400,"Data de campanha inválida.")
     if start and end and end<=start:s.close();raise HTTPException(400,"O encerramento deve ser posterior à disponibilidade inicial.")
     c.title=title;c.description=description;c.available_from=start;c.available_until=end;c.duration_hours=max(1,(duration_minutes+59)//60);c.duration_text=duration_label;c.active=(active=="on")
-    s.query(CampaignCourse).filter_by(campaign_id=c.id).delete();s.query(CampaignRole).filter_by(campaign_id=c.id).delete()
-    for cid in course_ids:
-        if s.get(Course,cid):s.add(CampaignCourse(campaign_id=c.id,course_id=cid))
-    for role in set(roles):
-        if role in ("colaborador","gestor","rh","admin"):s.add(CampaignRole(campaign_id=c.id,role=role))
-    audit(s,request,user_for(request,s),"campaign.updated","campaign",c.id,f"Cursos={len(course_ids)}; perfis={','.join(set(roles))}")
+    valid_roles={"colaborador","gestor","rh","admin"}
+    roles=sorted({r for r in roles if r in valid_roles})
+    valid_course_ids=sorted({cid for cid in course_ids if s.get(Course,cid)})
+    valid_group_ids=sorted({gid for gid in group_ids if s.get(UserGroup,gid)})
+    s.query(CampaignCourse).filter_by(campaign_id=c.id).delete(synchronize_session=False)
+    s.query(CampaignRole).filter_by(campaign_id=c.id).delete(synchronize_session=False)
+    s.query(CampaignGroup).filter_by(campaign_id=c.id).delete(synchronize_session=False)
+    for cid in valid_course_ids:s.add(CampaignCourse(campaign_id=c.id,course_id=cid))
+    for role in roles:s.add(CampaignRole(campaign_id=c.id,role=role))
+    for gid in valid_group_ids:s.add(CampaignGroup(campaign_id=c.id,group_id=gid))
+    # Recalcula o público selecionado e cria somente as matrículas que ainda não existem.
+    # Matrículas existentes são preservadas para não apagar progresso já realizado.
+    target_ids=set()
+    if roles:
+        target_ids.update(x.id for x in s.query(User).filter_by(active=True).filter(User.role.in_(roles)).all())
+    if valid_group_ids:
+        target_ids.update(x.user_id for x in s.query(GroupMember).filter(GroupMember.group_id.in_(valid_group_ids)).all())
+    if not roles and not valid_group_ids:
+        target_ids.update(x.id for x in s.query(User).filter_by(active=True,role="colaborador").all())
+    for cid in valid_course_ids:
+        for uid in target_ids:
+            exists=s.query(Enrollment.id).filter_by(user_id=uid,course_id=cid,campaign_id=c.id).first()
+            if not exists:s.add(Enrollment(user_id=uid,course_id=cid,campaign_id=c.id))
+    audit(s,request,user_for(request,s),"campaign.updated","campaign",c.id,f"Cursos={len(valid_course_ids)}; perfis={','.join(roles)}; grupos={','.join(map(str,valid_group_ids))}")
     s.commit();s.close();return RedirectResponse("/campaigns",303)
 
 @app.post("/campaigns/{campaign_id}/delete")
@@ -576,6 +602,7 @@ def campaign_delete(campaign_id:int,request:Request):
         s.query(Enrollment).filter(Enrollment.id.in_(enrollment_ids)).delete(synchronize_session=False)
     s.query(CampaignCourse).filter_by(campaign_id=c.id).delete(synchronize_session=False)
     s.query(CampaignRole).filter_by(campaign_id=c.id).delete(synchronize_session=False)
+    s.query(CampaignGroup).filter_by(campaign_id=c.id).delete(synchronize_session=False)
     # Certificados emitidos são registros históricos e permanecem disponíveis, sem vínculo com a campanha removida.
     s.query(Certificate).filter_by(campaign_id=c.id).update({Certificate.campaign_id:None},synchronize_session=False)
     s.query(EmailLog).filter_by(campaign_id=c.id).update({EmailLog.campaign_id:None},synchronize_session=False)
@@ -600,6 +627,7 @@ def campaigns_delete_all(request:Request,confirmation:str=Form("")):
         s.query(EmailLog).filter(EmailLog.campaign_id.in_(campaign_ids)).update({EmailLog.campaign_id:None},synchronize_session=False)
         s.query(CampaignCourse).filter(CampaignCourse.campaign_id.in_(campaign_ids)).delete(synchronize_session=False)
         s.query(CampaignRole).filter(CampaignRole.campaign_id.in_(campaign_ids)).delete(synchronize_session=False)
+        s.query(CampaignGroup).filter(CampaignGroup.campaign_id.in_(campaign_ids)).delete(synchronize_session=False)
         s.query(Campaign).filter(Campaign.id.in_(campaign_ids)).delete(synchronize_session=False)
     audit(s,request,actor,"campaigns.bulk_deleted","campaign", "all",f"Limpeza inicial: {len(campaign_ids)} campanhas e {len(enrollment_ids)} matrículas (incluindo avulsas/legadas) removidas; certificados históricos preservados")
     s.commit();s.close();return RedirectResponse("/campaigns",303)

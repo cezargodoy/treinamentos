@@ -59,9 +59,6 @@ class Course(Base):
     category:Mapped[str]=mapped_column(String(160),default="Geral")
     duration_minutes:Mapped[int]=mapped_column(Integer,default=15)
     sharepoint_url:Mapped[str]=mapped_column(Text,default="")
-    pdf_data:Mapped[bytes|None]=mapped_column(LargeBinary,nullable=True)
-    pdf_filename:Mapped[str]=mapped_column(String(240),default="")
-    pdf_mime:Mapped[str]=mapped_column(String(80),default="application/pdf")
     published:Mapped[bool]=mapped_column(Boolean,default=True)
     created_at:Mapped[datetime]=mapped_column(DateTime,default=datetime.utcnow)
     available_from:Mapped[datetime|None]=mapped_column(DateTime,nullable=True)
@@ -225,10 +222,6 @@ with engine.begin() as conn:
     cols={c["name"] for c in inspect(engine).get_columns("courses")}
     if "available_from" not in cols: conn.execute(text("ALTER TABLE courses ADD COLUMN available_from TIMESTAMP NULL"))
     if "available_until" not in cols: conn.execute(text("ALTER TABLE courses ADD COLUMN available_until TIMESTAMP NULL"))
-    cols={c["name"] for c in inspect(engine).get_columns("courses")}
-    if "pdf_data" not in cols: conn.execute(text("ALTER TABLE courses ADD COLUMN pdf_data BYTEA NULL"))
-    if "pdf_filename" not in cols: conn.execute(text("ALTER TABLE courses ADD COLUMN pdf_filename VARCHAR(240) NOT NULL DEFAULT ''"))
-    if "pdf_mime" not in cols: conn.execute(text("ALTER TABLE courses ADD COLUMN pdf_mime VARCHAR(80) NOT NULL DEFAULT 'application/pdf'"))
     cols={c["name"] for c in inspect(engine).get_columns("enrollments")}
     if "started_at" not in cols: conn.execute(text("ALTER TABLE enrollments ADD COLUMN started_at TIMESTAMP NULL"))
     if "last_activity" not in cols: conn.execute(text("ALTER TABLE enrollments ADD COLUMN last_activity TIMESTAMP NULL"))
@@ -439,22 +432,7 @@ def home(request:Request):
             for course in s.query(Course).filter_by(published=True).all():
                 if not s.query(Enrollment).filter_by(user_id=u.id,course_id=course.id).first():s.add(Enrollment(user_id=u.id,course_id=course.id))
             s.commit();es=s.query(Enrollment).filter_by(user_id=u.id).all()
-        campaign_ids=sorted({e.campaign_id for e in es if e.campaign_id})
-        campaign_tracks=[]; campaign_enrollment_ids=set()
-        for campaign_id in campaign_ids:
-            campaign=s.get(Campaign,campaign_id)
-            if not campaign or not campaign.active: continue
-            track_items=[]
-            track_enrollments=[e for e in es if e.campaign_id==campaign_id]
-            for enrollment in track_enrollments:
-                course=s.get(Course,enrollment.course_id)
-                if course: track_items.append((enrollment,course)); campaign_enrollment_ids.add(enrollment.id)
-            if track_items:
-                avg=round(sum(e.progress for e,_ in track_items)/len(track_items))
-                campaign_tracks.append({"campaign":campaign,"items":track_items,"progress":avg,"done":sum(1 for e,_ in track_items if e.status=="Concluído"),"total":len(track_items)})
-        standalone=[(e,s.get(Course,e.course_id)) for e in es if e.id not in campaign_enrollment_ids and e.campaign_id is None and s.get(Course,e.course_id)]
-        visible_enrollments=[e for e,_ in standalone]+[e for t in campaign_tracks for e,_ in t["items"]]
-        ctx=dict(user=u,admin=False,enrollments=standalone,campaign_tracks=campaign_tracks,certs=s.query(Certificate).filter_by(user_id=u.id).count(),avg_progress=round(sum(e.progress for e in visible_enrollments)/len(visible_enrollments)) if visible_enrollments else 0)
+        ctx=dict(user=u,admin=False,enrollments=[(e,s.get(Course,e.course_id)) for e in es],certs=s.query(Certificate).filter_by(user_id=u.id).count(),avg_progress=round(sum(e.progress for e in es)/len(es)) if es else 0)
     s.close();return render("dashboard.html",**ctx)
 @app.get("/courses",response_class=HTMLResponse)
 def courses(request:Request):
@@ -462,31 +440,12 @@ def courses(request:Request):
     assessments={a.course_id:a for a in s.query(Assessment).all()}
     result=render("courses.html",user=u,courses=items,assessments=assessments);s.close();return result
 @app.post("/courses")
-async def add_course(request:Request,title:str=Form(...),description:str=Form(""),category:str=Form("Geral"),duration:int=Form(15),sharepoint_url:str=Form(""),pdf_file:UploadFile|None=File(None)):
+def add_course(request:Request,title:str=Form(...),description:str=Form(""),category:str=Form("Geral"),duration:int=Form(15),sharepoint_url:str=Form("")):
     s=db();require(request,s,["admin","rh"])
-    pdf_data=None;pdf_filename=""
-    if pdf_file and pdf_file.filename:
-        if not pdf_file.filename.lower().endswith(".pdf") or pdf_file.content_type not in ("application/pdf","application/octet-stream"):
-            s.close();raise HTTPException(400,"Envie um arquivo PDF válido.")
-        pdf_data=await pdf_file.read()
-        if len(pdf_data)>25*1024*1024:
-            s.close();raise HTTPException(413,"O PDF deve ter no máximo 25 MB.")
-        if not pdf_data.startswith(b"%PDF-"):
-            s.close();raise HTTPException(400,"O arquivo enviado não parece ser um PDF válido.")
-        pdf_filename=pdf_file.filename[:240]
-    if not sharepoint_url and not pdf_data:
-        s.close();raise HTTPException(400,"Informe um link de vídeo ou anexe um PDF.")
-    s.add(Course(title=title,description=description,category=category,duration_minutes=duration,sharepoint_url=sharepoint_url,pdf_data=pdf_data,pdf_filename=pdf_filename,available_from=None,available_until=None));s.commit();s.close();return RedirectResponse("/courses",303)
-@app.get("/courses/{course_id}/pdf")
-def course_pdf(course_id:int,request:Request):
-    s=db();u=require(request,s);c=s.get(Course,course_id)
-    if not c or not c.pdf_data:
-        s.close();raise HTTPException(404,"PDF não encontrado.")
-    allowed=u.role in ("admin","rh") or s.query(Enrollment).filter_by(user_id=u.id,course_id=course_id).first() is not None
-    if not allowed:
-        s.close();raise HTTPException(403,"Você não possui acesso a este material.")
-    data=c.pdf_data;filename=c.pdf_filename or f"conteudo-{course_id}.pdf";s.close()
-    return StreamingResponse(iter([data]),media_type="application/pdf",headers={"Content-Disposition":f'inline; filename="{filename.replace(chr(34), "")}"','X-Content-Type-Options':'nosniff'})
+    def parse_dt(v):
+        try:return datetime.fromisoformat(v) if v else None
+        except ValueError:return None
+    s.add(Course(title=title,description=description,category=category,duration_minutes=duration,sharepoint_url=sharepoint_url,available_from=None,available_until=None));s.commit();s.close();return RedirectResponse("/courses",303)
 @app.get("/campaigns",response_class=HTMLResponse)
 def campaigns(request:Request):
     s=db();u=require(request,s,["admin","rh"]);cs=s.query(Campaign).order_by(Campaign.created_at.desc()).all();courses=s.query(Course).all();groups=s.query(UserGroup).order_by(UserGroup.name).all();users=s.query(User).filter_by(active=True).all()
@@ -524,9 +483,6 @@ def add_campaign(request:Request,title:str=Form(...),description:str=Form(""),av
         try:return datetime.fromisoformat(value) if value else None
         except ValueError:return None
     start,end=campaign_dt(available_from),campaign_dt(available_until)
-    course_ids=list(dict.fromkeys(course_ids))
-    if not course_ids:
-        s.close();raise HTTPException(400,"Selecione pelo menos um conteúdo para compor a trilha.")
     if start and end and end<=start: s.close();raise HTTPException(400,"O encerramento deve ser posterior à disponibilidade inicial.")
     c=Campaign(title=title,description=description,available_from=start,available_until=end,duration_hours=max(1,(duration_minutes+59)//60),duration_text=duration_label);s.add(c);s.flush()
     valid_roles={"colaborador","gestor","rh","admin"};roles=[r for r in roles if r in valid_roles]
@@ -569,37 +525,13 @@ def campaign_edit(campaign_id:int,request:Request,title:str=Form(...),descriptio
 def campaign_delete(campaign_id:int,request:Request):
     s=db();actor=require(request,s,["admin"]);c=s.get(Campaign,campaign_id)
     if not c:s.close();raise HTTPException(404)
-    # Excluir atribuições e eventos da trilha para que ela desapareça do painel de todos os alunos.
-    enrollment_ids=[x[0] for x in s.query(Enrollment.id).filter_by(campaign_id=c.id).all()]
-    if enrollment_ids:
-        s.query(LearningEvent).filter(LearningEvent.enrollment_id.in_(enrollment_ids)).delete(synchronize_session=False)
-        s.query(Enrollment).filter(Enrollment.id.in_(enrollment_ids)).delete(synchronize_session=False)
+    # Preserve learning history and certificates: detach enrollments/certificates before removing campaign links.
     s.query(CampaignCourse).filter_by(campaign_id=c.id).delete(synchronize_session=False)
     s.query(CampaignRole).filter_by(campaign_id=c.id).delete(synchronize_session=False)
-    # Certificados emitidos são registros históricos e permanecem disponíveis, sem vínculo com a campanha removida.
+    s.query(Enrollment).filter_by(campaign_id=c.id).update({Enrollment.campaign_id:None},synchronize_session=False)
     s.query(Certificate).filter_by(campaign_id=c.id).update({Certificate.campaign_id:None},synchronize_session=False)
-    s.query(EmailLog).filter_by(campaign_id=c.id).update({EmailLog.campaign_id:None},synchronize_session=False)
-    audit(s,request,actor,"campaign.deleted","campaign",c.id,f"Campanha excluída: {c.title}; matrículas e eventos da trilha removidos; certificados históricos preservados")
+    audit(s,request,actor,"campaign.deleted","campaign",c.id,f"Campanha excluída: {c.title}; histórico de matrículas e certificados preservado sem vínculo com a campanha")
     s.delete(c);s.commit();s.close();return RedirectResponse("/campaigns",303)
-
-@app.post("/campaigns/delete-all")
-def campaigns_delete_all(request:Request,confirmation:str=Form("")):
-    s=db();actor=require(request,s,["admin"])
-    if confirmation.strip().upper()!="EXCLUIR TODAS":
-        s.close();raise HTTPException(400,"Confirmação inválida. Digite EXCLUIR TODAS.")
-    campaign_ids=[x[0] for x in s.query(Campaign.id).all()]
-    enrollment_ids=[x[0] for x in s.query(Enrollment.id).filter(Enrollment.campaign_id.in_(campaign_ids)).all()] if campaign_ids else []
-    if enrollment_ids:
-        s.query(LearningEvent).filter(LearningEvent.enrollment_id.in_(enrollment_ids)).delete(synchronize_session=False)
-        s.query(Enrollment).filter(Enrollment.id.in_(enrollment_ids)).delete(synchronize_session=False)
-    if campaign_ids:
-        s.query(Certificate).filter(Certificate.campaign_id.in_(campaign_ids)).update({Certificate.campaign_id:None},synchronize_session=False)
-        s.query(EmailLog).filter(EmailLog.campaign_id.in_(campaign_ids)).update({EmailLog.campaign_id:None},synchronize_session=False)
-        s.query(CampaignCourse).filter(CampaignCourse.campaign_id.in_(campaign_ids)).delete(synchronize_session=False)
-        s.query(CampaignRole).filter(CampaignRole.campaign_id.in_(campaign_ids)).delete(synchronize_session=False)
-        s.query(Campaign).filter(Campaign.id.in_(campaign_ids)).delete(synchronize_session=False)
-    audit(s,request,actor,"campaigns.bulk_deleted","campaign", "all",f"Limpeza inicial: {len(campaign_ids)} campanhas e {len(enrollment_ids)} matrículas removidas; certificados históricos preservados")
-    s.commit();s.close();return RedirectResponse("/campaigns",303)
 
 @app.post("/courses/{course_id}/delete")
 def course_delete(course_id:int,request:Request):

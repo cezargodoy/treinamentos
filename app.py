@@ -68,7 +68,9 @@ class Campaign(Base):
     id:Mapped[int]=mapped_column(primary_key=True)
     title:Mapped[str]=mapped_column(String(240))
     description:Mapped[str]=mapped_column(Text,default="")
-    due_date:Mapped[str]=mapped_column(String(10),default="")
+    due_date:Mapped[str]=mapped_column(String(10),default="")  # legado; não exibido na interface
+    available_from:Mapped[datetime|None]=mapped_column(DateTime,nullable=True)
+    available_until:Mapped[datetime|None]=mapped_column(DateTime,nullable=True)
     active:Mapped[bool]=mapped_column(Boolean,default=True)
     duration_hours:Mapped[int]=mapped_column(Integer,default=1)
     duration_text:Mapped[str]=mapped_column(String(40),default="1h")
@@ -121,6 +123,7 @@ class UserGroup(Base):
     id:Mapped[int]=mapped_column(primary_key=True)
     name:Mapped[str]=mapped_column(String(160),unique=True)
     description:Mapped[str]=mapped_column(Text,default="")
+    access_role:Mapped[str]=mapped_column(String(30),default="colaborador")
     created_at:Mapped[datetime]=mapped_column(DateTime,default=datetime.utcnow)
 class GroupMember(Base):
     __tablename__="group_members"
@@ -200,6 +203,10 @@ if "password_hash" not in [c["name"] for c in inspect(engine).get_columns("users
 # Migrações aditivas para bancos já utilizados no MVP.
 with engine.begin() as conn:
     campaign_cols={c["name"] for c in inspect(engine).get_columns("campaigns")}
+    if "available_from" not in campaign_cols: conn.execute(text("ALTER TABLE campaigns ADD COLUMN available_from TIMESTAMP NULL"))
+    if "available_until" not in campaign_cols: conn.execute(text("ALTER TABLE campaigns ADD COLUMN available_until TIMESTAMP NULL"))
+    group_cols={c["name"] for c in inspect(engine).get_columns("user_groups")}
+    if "access_role" not in group_cols: conn.execute(text("ALTER TABLE user_groups ADD COLUMN access_role VARCHAR(30) NOT NULL DEFAULT 'colaborador'"))
     if "duration_hours" not in campaign_cols: conn.execute(text("ALTER TABLE campaigns ADD COLUMN duration_hours INTEGER NOT NULL DEFAULT 1"))
     if "duration_text" not in campaign_cols: conn.execute(text("ALTER TABLE campaigns ADD COLUMN duration_text VARCHAR(40) NOT NULL DEFAULT '1h'"))
     cert_cols={c["name"] for c in inspect(engine).get_columns("certificates")}
@@ -273,12 +280,15 @@ def user_for(request,s):
 def require(request,s,roles=None):
     u=user_for(request,s)
     if not u or not u.active: raise HTTPException(401,"Faça login para continuar.")
-    if roles and u.role not in roles: raise HTTPException(403,"Acesso não autorizado.")
+    group_roles=[r[0] for r in s.query(UserGroup.access_role).join(GroupMember,GroupMember.group_id==UserGroup.id).filter(GroupMember.user_id==u.id).distinct().all()]
+    effective_roles=set([u.role]+group_roles)
+    if roles and not effective_roles.intersection(roles): raise HTTPException(403,"Acesso não autorizado.")
     path=request.url.path
     module=("reports" if path.startswith("/reports") else "users" if path.startswith("/admin/users") else "courses" if path.startswith(("/courses","/learn")) else "campaigns" if path.startswith("/campaigns") else "forum" if path.startswith("/forum") else "certificates" if path.startswith("/certificates") else "dashboard" if path=="/" else None)
-    if module and u.role!="admin":
-        perm=s.query(RoleModule).filter_by(role=u.role,module=module).first() if "RoleModule" in globals() else None
-        if perm and not perm.enabled: raise HTTPException(403,"Seu perfil não possui acesso a este módulo.")
+    if module and "admin" not in effective_roles:
+        role_perms=[s.query(RoleModule).filter_by(role=role,module=module).first() for role in effective_roles if role in ("rh","gestor","colaborador")]
+        if role_perms and not any(x.enabled for x in role_perms if x is not None) and all(x is not None for x in role_perms):
+            raise HTTPException(403,"Seu perfil não possui acesso a este módulo.")
     return u
 def render(name,**ctx):
     ctx.setdefault("app_language", get_setting("language","pt-BR"))
@@ -430,14 +440,12 @@ def courses(request:Request):
     assessments={a.course_id:a for a in s.query(Assessment).all()}
     result=render("courses.html",user=u,courses=items,assessments=assessments);s.close();return result
 @app.post("/courses")
-def add_course(request:Request,title:str=Form(...),description:str=Form(""),category:str=Form("Geral"),duration:int=Form(15),sharepoint_url:str=Form(""),available_from:str=Form(""),available_until:str=Form("")):
+def add_course(request:Request,title:str=Form(...),description:str=Form(""),category:str=Form("Geral"),duration:int=Form(15),sharepoint_url:str=Form("")):
     s=db();require(request,s,["admin","rh"])
     def parse_dt(v):
         try:return datetime.fromisoformat(v) if v else None
         except ValueError:return None
-    start,end=parse_dt(available_from),parse_dt(available_until)
-    if start and end and end<=start: raise HTTPException(400,"O encerramento deve ser posterior à abertura.")
-    s.add(Course(title=title,description=description,category=category,duration_minutes=duration,sharepoint_url=sharepoint_url,available_from=start,available_until=end));s.commit();s.close();return RedirectResponse("/courses",303)
+    s.add(Course(title=title,description=description,category=category,duration_minutes=duration,sharepoint_url=sharepoint_url,available_from=None,available_until=None));s.commit();s.close();return RedirectResponse("/courses",303)
 @app.get("/campaigns",response_class=HTMLResponse)
 def campaigns(request:Request):
     s=db();u=require(request,s,["admin","rh"]);cs=s.query(Campaign).order_by(Campaign.created_at.desc()).all();courses=s.query(Course).all();groups=s.query(UserGroup).order_by(UserGroup.name).all();users=s.query(User).filter_by(active=True).all()
@@ -469,8 +477,14 @@ def campaign_duration_label(campaign):
     return (f"{h}h" if h else "")+(f"{m}min" if m else "")
 
 @app.post("/campaigns")
-def add_campaign(request:Request,title:str=Form(...),description:str=Form(""),due_date:str=Form(""),duration_hours:str=Form("1h"),course_ids:list[int]=Form([]),group_ids:list[int]=Form([]),roles:list[str]=Form([])):
-    s=db();require(request,s,["admin"]);duration_minutes,duration_label=parse_duration_label(duration_hours);c=Campaign(title=title,description=description,due_date=due_date,duration_hours=max(1,(duration_minutes+59)//60),duration_text=duration_label);s.add(c);s.flush()
+def add_campaign(request:Request,title:str=Form(...),description:str=Form(""),available_from:str=Form(""),available_until:str=Form(""),duration_hours:str=Form("1h"),course_ids:list[int]=Form([]),group_ids:list[int]=Form([]),roles:list[str]=Form([])):
+    s=db();require(request,s,["admin"]);duration_minutes,duration_label=parse_duration_label(duration_hours)
+    def campaign_dt(value):
+        try:return datetime.fromisoformat(value) if value else None
+        except ValueError:return None
+    start,end=campaign_dt(available_from),campaign_dt(available_until)
+    if start and end and end<=start: s.close();raise HTTPException(400,"O encerramento deve ser posterior à disponibilidade inicial.")
+    c=Campaign(title=title,description=description,available_from=start,available_until=end,duration_hours=max(1,(duration_minutes+59)//60),duration_text=duration_label);s.add(c);s.flush()
     valid_roles={"colaborador","gestor","rh","admin"};roles=[r for r in roles if r in valid_roles]
     for role in roles:s.add(CampaignRole(campaign_id=c.id,role=role))
     for cid in course_ids:
@@ -491,10 +505,14 @@ def campaign_edit_page(campaign_id:int,request:Request):
     if not c:s.close();raise HTTPException(404)
     result=render("campaign_edit.html",user=actor,campaign=c,courses=s.query(Course).all(),selected_courses=[x.course_id for x in s.query(CampaignCourse).filter_by(campaign_id=c.id)],selected_roles=[x.role for x in s.query(CampaignRole).filter_by(campaign_id=c.id)],roles=["colaborador","gestor","rh","admin"]);s.close();return result
 @app.post("/campaigns/{campaign_id}/edit")
-def campaign_edit(campaign_id:int,request:Request,title:str=Form(...),description:str=Form(""),due_date:str=Form(""),duration_hours:str=Form("1h"),active:str=Form(""),course_ids:list[int]=Form([]),roles:list[str]=Form([])):
+def campaign_edit(campaign_id:int,request:Request,title:str=Form(...),description:str=Form(""),available_from:str=Form(""),available_until:str=Form(""),duration_hours:str=Form("1h"),active:str=Form(""),course_ids:list[int]=Form([]),roles:list[str]=Form([])):
     s=db();require(request,s,["admin"]);c=s.get(Campaign,campaign_id)
     if not c:s.close();raise HTTPException(404)
-    duration_minutes,duration_label=parse_duration_label(duration_hours);c.title=title;c.description=description;c.due_date=due_date;c.duration_hours=max(1,(duration_minutes+59)//60);c.duration_text=duration_label;c.active=(active=="on")
+    duration_minutes,duration_label=parse_duration_label(duration_hours)
+    try:start=datetime.fromisoformat(available_from) if available_from else None;end=datetime.fromisoformat(available_until) if available_until else None
+    except ValueError:s.close();raise HTTPException(400,"Data de campanha inválida.")
+    if start and end and end<=start:s.close();raise HTTPException(400,"O encerramento deve ser posterior à disponibilidade inicial.")
+    c.title=title;c.description=description;c.available_from=start;c.available_until=end;c.duration_hours=max(1,(duration_minutes+59)//60);c.duration_text=duration_label;c.active=(active=="on")
     s.query(CampaignCourse).filter_by(campaign_id=c.id).delete();s.query(CampaignRole).filter_by(campaign_id=c.id).delete()
     for cid in course_ids:
         if s.get(Course,cid):s.add(CampaignCourse(campaign_id=c.id,course_id=cid))
@@ -538,10 +556,12 @@ def learn(cid:int,request:Request):
     e=s.query(Enrollment).filter_by(user_id=u.id,course_id=cid).first()
     if not e and u.role=="admin" and request.session.get("learner_view") and c:
         e=Enrollment(user_id=u.id,course_id=cid);s.add(e);s.flush()
-    now=datetime.now(ZoneInfo("America/Sao_Paulo")).replace(tzinfo=None)
+    now=datetime.now(ZoneInfo(get_setting("timezone","America/Sao_Paulo"))).replace(tzinfo=None)
     if not c or (u.role=="admin" and not request.session.get("learner_view")) or (u.role!="admin" and not e):s.close();raise HTTPException(404)
-    if c.available_from and now<c.available_from: s.close();raise HTTPException(403,"Este treinamento ainda não está disponível.")
-    if c.available_until and now>c.available_until: s.close();raise HTTPException(403,"O período deste treinamento foi encerrado.")
+    if e and e.campaign_id:
+        campaign=s.get(Campaign,e.campaign_id)
+        if campaign and campaign.available_from and now<campaign.available_from:s.close();raise HTTPException(403,"Esta campanha ainda não está disponível.")
+        if campaign and campaign.available_until and now>campaign.available_until:s.close();raise HTTPException(403,"O período desta campanha foi encerrado.")
     if e:
         if not e.started_at: e.started_at=now;e.status="Em andamento";e.progress=max(e.progress,1)
         e.last_activity=now;s.commit()
@@ -925,19 +945,22 @@ def module_allowed(s,u,module):
 def groups_page(request:Request):
     s=db();u=require(request,s,["admin","rh"]);groups=s.query(UserGroup).order_by(UserGroup.name).all();users=s.query(User).filter_by(active=True).order_by(User.name).all()
     data=[(g,[s.get(User,m.user_id) for m in s.query(GroupMember).filter_by(group_id=g.id).all()]) for g in groups];s.close()
-    return render("groups.html",user=u,groups=data,users=users)
+    return render("groups.html",user=u,groups=data,users=users,access_roles=[("colaborador","Colaborador"),("gestor","Gestor"),("rh","RH")])
 @app.post("/admin/groups")
-def create_group(request:Request,name:str=Form(...),description:str=Form(""),user_ids:list[int]=Form([])):
+def create_group(request:Request,name:str=Form(...),description:str=Form(""),access_role:str=Form("colaborador"),user_ids:list[int]=Form([])):
     s=db();require(request,s,["admin","rh"]);name=name.strip()
     if not name or s.query(UserGroup).filter(func.lower(UserGroup.name)==name.lower()).first(): s.close();raise HTTPException(400,"Nome de grupo inválido ou já existente.")
-    g=UserGroup(name=name,description=description);s.add(g);s.flush()
+    access_role=access_role if access_role in ("colaborador","gestor","rh") else "colaborador"
+    g=UserGroup(name=name,description=description,access_role=access_role);s.add(g);s.flush()
     for uid in set(user_ids):
         if s.get(User,uid):s.add(GroupMember(group_id=g.id,user_id=uid))
     s.commit();s.close();return RedirectResponse("/admin/groups",303)
 @app.post("/admin/groups/{gid}/members")
-def update_group_members(gid:int,request:Request,user_ids:list[int]=Form([])):
+def update_group_members(gid:int,request:Request,user_ids:list[int]=Form([]),access_role:str=Form("colaborador"),description:str=Form("")):
     s=db();require(request,s,["admin","rh"]);g=s.get(UserGroup,gid)
     if not g:s.close();raise HTTPException(404)
+    g.access_role=access_role if access_role in ("colaborador","gestor","rh") else "colaborador"
+    g.description=description
     s.query(GroupMember).filter_by(group_id=gid).delete()
     for uid in set(user_ids):
         if s.get(User,uid):s.add(GroupMember(group_id=gid,user_id=uid))
@@ -1069,7 +1092,7 @@ def admin_settings(request:Request):
         try:return _fernet().decrypt(row.value.encode()).decode()
         except Exception:return ""
     context={"user":actor,"tenant":val("entra_tenant"),"client_id":val("entra_client_id"),
-             "has_client_secret":bool(val("entra_client_secret")),"language":val("language") or "pt-BR",
+             "has_client_secret":bool(val("entra_client_secret")),"language":val("language") or "pt-BR","timezone":val("timezone") or "America/Sao_Paulo",
              "smtp_host":val("smtp_host"),"smtp_port":val("smtp_port") or "587",
              "smtp_user":val("smtp_user"),"has_smtp_password":bool(val("smtp_password")),
              "smtp_from":val("smtp_from") or val("smtp_user")}
@@ -1080,11 +1103,14 @@ def admin_settings(request:Request):
     return result
 
 @app.post("/admin/settings")
-def save_admin_settings(request:Request,language:str=Form("pt-BR"),entra_tenant:str=Form(""),
+def save_admin_settings(request:Request,language:str=Form("pt-BR"),timezone_name:str=Form("America/Sao_Paulo"),entra_tenant:str=Form(""),
         entra_client_id:str=Form(""),entra_client_secret:str=Form(""),smtp_host:str=Form(""),
         smtp_port:str=Form("587"),smtp_user:str=Form(""),smtp_password:str=Form(""),smtp_from:str=Form("")):
     s=db();actor=require(request,s,["admin"])
-    values={"language":language,"entra_tenant":entra_tenant.strip(),"entra_client_id":entra_client_id.strip(),
+    valid_languages={"pt-BR","en-US","es-ES"};valid_timezones={"America/Sao_Paulo","America/Manaus","America/Belem","America/Fortaleza","America/Rio_Branco","America/Noronha","UTC"}
+    if language not in valid_languages:language="pt-BR"
+    if timezone_name not in valid_timezones:timezone_name="America/Sao_Paulo"
+    values={"language":language,"timezone":timezone_name,"entra_tenant":entra_tenant.strip(),"entra_client_id":entra_client_id.strip(),
             "smtp_host":smtp_host.strip(),"smtp_port":smtp_port.strip(),"smtp_user":smtp_user.strip(),"smtp_from":smtp_from.strip()}
     for k,v in values.items():set_setting(s,k,v)
     if entra_client_secret.strip():set_setting(s,"entra_client_secret",entra_client_secret.strip())

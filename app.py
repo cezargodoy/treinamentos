@@ -62,6 +62,8 @@ class Course(Base):
     pdf_data:Mapped[bytes|None]=mapped_column(LargeBinary,nullable=True)
     pdf_filename:Mapped[str]=mapped_column(String(240),default="")
     pdf_mime:Mapped[str]=mapped_column(String(80),default="application/pdf")
+    thumbnail_data:Mapped[bytes|None]=mapped_column(LargeBinary,nullable=True)
+    thumbnail_mime:Mapped[str]=mapped_column(String(40),default="")
     published:Mapped[bool]=mapped_column(Boolean,default=True)
     created_at:Mapped[datetime]=mapped_column(DateTime,default=datetime.utcnow)
     available_from:Mapped[datetime|None]=mapped_column(DateTime,nullable=True)
@@ -235,6 +237,8 @@ with engine.begin() as conn:
     if "pdf_data" not in cols: conn.execute(text("ALTER TABLE courses ADD COLUMN pdf_data BYTEA NULL"))
     if "pdf_filename" not in cols: conn.execute(text("ALTER TABLE courses ADD COLUMN pdf_filename VARCHAR(240) NOT NULL DEFAULT ''"))
     if "pdf_mime" not in cols: conn.execute(text("ALTER TABLE courses ADD COLUMN pdf_mime VARCHAR(80) NOT NULL DEFAULT 'application/pdf'"))
+    if "thumbnail_data" not in cols: conn.execute(text("ALTER TABLE courses ADD COLUMN thumbnail_data BYTEA NULL"))
+    if "thumbnail_mime" not in cols: conn.execute(text("ALTER TABLE courses ADD COLUMN thumbnail_mime VARCHAR(40) NOT NULL DEFAULT ''"))
     cols={c["name"] for c in inspect(engine).get_columns("enrollments")}
     if "started_at" not in cols: conn.execute(text("ALTER TABLE enrollments ADD COLUMN started_at TIMESTAMP NULL"))
     if "last_activity" not in cols: conn.execute(text("ALTER TABLE enrollments ADD COLUMN last_activity TIMESTAMP NULL"))
@@ -468,9 +472,17 @@ def courses(request:Request):
     assessments={a.course_id:a for a in s.query(Assessment).all()}
     result=render("courses.html",user=u,courses=items,assessments=assessments);s.close();return result
 @app.post("/courses")
-async def add_course(request:Request,title:str=Form(...),description:str=Form(""),category:str=Form("Geral"),duration:int=Form(15),sharepoint_url:str=Form(""),pdf_file:UploadFile|None=File(None)):
+async def add_course(request:Request,title:str=Form(...),description:str=Form(""),category:str=Form("Geral"),duration:int=Form(15),sharepoint_url:str=Form(""),pdf_file:UploadFile|None=File(None),thumbnail_file:UploadFile|None=File(None)):
     s=db();require(request,s,["admin","rh"])
-    pdf_data=None;pdf_filename=""
+    pdf_data=None;pdf_filename="";thumbnail_data=None;thumbnail_mime=""
+    if thumbnail_file and thumbnail_file.filename:
+        thumbnail_data=await thumbnail_file.read()
+        allowed_signatures={"image/jpeg":thumbnail_data.startswith(b"\xff\xd8\xff"),"image/png":thumbnail_data.startswith(b"\x89PNG\r\n\x1a\n"),"image/webp":len(thumbnail_data)>=12 and thumbnail_data[:4]==b"RIFF" and thumbnail_data[8:12]==b"WEBP"}
+        if thumbnail_file.content_type not in allowed_signatures or not allowed_signatures.get(thumbnail_file.content_type,False):
+            s.close();raise HTTPException(400,"A thumbnail deve ser uma imagem JPG, PNG ou WebP válida.")
+        if len(thumbnail_data)>5*1024*1024:
+            s.close();raise HTTPException(413,"A thumbnail deve ter no máximo 5 MB.")
+        thumbnail_mime=thumbnail_file.content_type
     if pdf_file and pdf_file.filename:
         if not pdf_file.filename.lower().endswith(".pdf") or pdf_file.content_type not in ("application/pdf","application/octet-stream"):
             s.close();raise HTTPException(400,"Envie um arquivo PDF válido.")
@@ -482,7 +494,18 @@ async def add_course(request:Request,title:str=Form(...),description:str=Form(""
         pdf_filename=pdf_file.filename[:240]
     if not sharepoint_url and not pdf_data:
         s.close();raise HTTPException(400,"Informe um link de vídeo ou anexe um PDF.")
-    s.add(Course(title=title,description=description,category=category,duration_minutes=duration,sharepoint_url=sharepoint_url,pdf_data=pdf_data,pdf_filename=pdf_filename,available_from=None,available_until=None));s.commit();s.close();return RedirectResponse("/courses",303)
+    s.add(Course(title=title,description=description,category=category,duration_minutes=duration,sharepoint_url=sharepoint_url,pdf_data=pdf_data,pdf_filename=pdf_filename,thumbnail_data=thumbnail_data,thumbnail_mime=thumbnail_mime,available_from=None,available_until=None));s.commit();s.close();return RedirectResponse("/courses",303)
+@app.get("/courses/{course_id}/thumbnail")
+def course_thumbnail(course_id:int,request:Request):
+    s=db();u=require(request,s);c=s.get(Course,course_id)
+    if not c or not c.thumbnail_data:
+        s.close();raise HTTPException(404,"Thumbnail não encontrada.")
+    allowed=u.role in ("admin","rh") or s.query(Enrollment).filter_by(user_id=u.id,course_id=course_id).first() is not None
+    if not allowed:
+        s.close();raise HTTPException(403,"Você não possui acesso a este conteúdo.")
+    data=c.thumbnail_data;mime=c.thumbnail_mime or "image/jpeg";s.close()
+    return StreamingResponse(iter([data]),media_type=mime,headers={"Cache-Control":"private, max-age=3600","X-Content-Type-Options":"nosniff"})
+
 @app.get("/courses/{course_id}/pdf")
 def course_pdf(course_id:int,request:Request):
     s=db();u=require(request,s);c=s.get(Course,course_id)

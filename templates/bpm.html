@@ -8,22 +8,58 @@
   <div class="bpm-metrics"><div class="bpm-metric"><small>MACROPROCESSOS / GRUPOS</small><strong>{{ macro_count }}</strong><span>Estruturas da cadeia de valor</span></div><div class="bpm-metric"><small>PROCESSOS CADASTRADOS</small><strong>{{ process_count }}</strong><span>Itens importados da referência</span></div><div class="bpm-metric"><small>TOTAL DE REGISTROS</small><strong>{{ total }}</strong><span>Hierarquia pronta para expansão</span></div><div class="bpm-metric bpm-metric-highlight"><small>PRÓXIMA EVOLUÇÃO</small><strong>BPMN 2.0</strong><span>Modelagem e execução de workflows</span></div></div>
   <div class="bpm-section-head" id="bpm-groups"><div><div class="eyebrow">MAPA INTERATIVO</div><h2>Visão macro da organização</h2><p>Selecione um bloco para visualizar seus processos e abrir o detalhamento.</p></div><div class="bpm-search"><span>⌕</span><input id="bpmSearch" type="search" placeholder="Buscar processo ou área..."></div></div>
   <div class="bpm-category-tabs"><button class="active" data-filter="all">Todos</button><button data-filter="Cadeia de Valor">Cadeia de valor</button><button data-filter="Processos Secundários">Secundários</button><button data-filter="Fornecedores">Fornecedores</button><button data-filter="Processos de Apoio Estratégico">Apoio estratégico</button><button data-filter="Qualidade, Compliance & Segurança">Qualidade, compliance & segurança</button></div>
-  <div class="bpm-grid" id="bpmGrid">
-  {% for group in tree %}
-    <section class="bpm-group" data-category="{{ group.category }}" data-search="{{ (group.name ~ ' ' ~ (group.children|map(attribute='name')|join(' ')))|lower }}">
-      <button class="bpm-group-head" type="button" aria-expanded="false"><span class="bpm-group-icon">{% if group.category=='Cadeia de Valor' %}↗{% elif group.category=='Fornecedores' %}◇{% elif group.category=='Qualidade, Compliance & Segurança' %}✓{% else %}▦{% endif %}</span><span class="bpm-group-title"><small>{{ group.category }}</small><strong>{{ group.name }}</strong><em>{{ group.children|length }} processos mapeados</em></span><span class="bpm-chevron">⌄</span></button>
-      <div class="bpm-group-body"><div class="bpm-process-list">{% for child in group.children %}<a class="bpm-process" href="/bpm/process/{{ child.id }}"><span class="bpm-process-code">{{ child.code }}</span><strong>{{ child.name }}</strong><span class="bpm-process-arrow">→</span></a>{% endfor %}</div></div>
-    </section>
-  {% endfor %}
+  <div class="bpm-value-map" id="bpmValueMap" aria-label="Mapa interativo da cadeia de valor Gertec">
+    <div class="bpm-map-caption"><span>CADEIA DE VALOR · PROCESSOS PRINCIPAIS</span><small>Passe o mouse para relacionar macroprocessos e processos</small></div>
+    <div class="bpm-value-chain" id="bpmValueChain">
+      {% for group in tree if group.category == 'Cadeia de Valor' %}
+      <button type="button" class="bpm-value-node" data-group="{{ group.id }}" aria-pressed="false" title="{{ group.name }}">
+        <span class="bpm-node-index">{{ '%02d'|format(loop.index) }}</span><strong>{{ group.name }}</strong><span class="bpm-node-count">{{ group.children|length }} processos</span>
+      </button>
+      {% endfor %}
+    </div>
+    <div class="bpm-map-lower">
+      {% for category in ['Processos Secundários','Fornecedores','Processos de Apoio Estratégico','Qualidade, Compliance & Segurança'] %}
+      <section class="bpm-map-panel bpm-panel-{{ loop.index }}" data-category="{{ category }}">
+        <header><span>{{ category }}</span><small>{% if category == 'Processos Secundários' %}SUPORTE OPERACIONAL{% elif category == 'Fornecedores' %}ECOSSISTEMA EXTERNO{% elif category == 'Processos de Apoio Estratégico' %}GOVERNANÇA E APOIO{% else %}CONTROLES TRANSVERSAIS{% endif %}</small></header>
+        <div class="bpm-map-items">
+          {% for group in tree if group.category == category %}
+            {% for child in group.children %}
+            <a class="bpm-map-process" data-group="{{ group.id }}" data-category="{{ category }}" data-search="{{ (child.code ~ ' ' ~ child.name ~ ' ' ~ group.name)|lower }}" href="/bpm/process/{{ child.id }}"><small>{{ child.code }}</small><strong>{{ child.name }}</strong><span>↗</span></a>
+            {% endfor %}
+          {% endfor %}
+        </div>
+      </section>
+      {% endfor %}
+    </div>
+    <div class="bpm-map-chain-processes" id="bpmChainProcesses">
+      {% for group in tree if group.category == 'Cadeia de Valor' %}
+      <section class="bpm-chain-process-group" data-group="{{ group.id }}" data-category="Cadeia de Valor">
+        <header><span class="bpm-chain-dot"></span><div><small>{{ group.code }} · CADEIA DE VALOR</small><strong>{{ group.name }}</strong></div><em>{{ group.children|length }} processos</em></header>
+        <div class="bpm-chain-process-list">
+          {% for child in group.children %}
+          <a class="bpm-map-process" data-group="{{ group.id }}" data-category="Cadeia de Valor" data-search="{{ (child.code ~ ' ' ~ child.name ~ ' ' ~ group.name)|lower }}" href="/bpm/process/{{ child.id }}"><small>{{ child.code }}</small><strong>{{ child.name }}</strong><span>→</span></a>
+          {% endfor %}
+        </div>
+      </section>
+      {% endfor %}
+    </div>
+    <div class="bpm-map-empty" id="bpmMapEmpty" hidden>Nenhum processo encontrado para a busca.</div>
   </div>
   <div class="bpm-footer-note"><span>GERTEC BPM</span><p>Estrutura de referência baseada na cadeia de valor fornecida. Os responsáveis, fluxos, indicadores e playbooks serão configurados progressivamente pelas áreas.</p></div>
 </div>
 <script>
 (function(){
- const groups=[...document.querySelectorAll('.bpm-group')], search=document.getElementById('bpmSearch');
- groups.forEach(g=>g.querySelector('.bpm-group-head').addEventListener('click',()=>{g.classList.toggle('open');g.querySelector('.bpm-group-head').setAttribute('aria-expanded',g.classList.contains('open')?'true':'false')}));
- document.querySelectorAll('.bpm-category-tabs button').forEach(b=>b.addEventListener('click',()=>{document.querySelectorAll('.bpm-category-tabs button').forEach(x=>x.classList.remove('active'));b.classList.add('active');groups.forEach(g=>g.hidden=b.dataset.filter!=='all'&&g.dataset.category!==b.dataset.filter)}));
- search.addEventListener('input',()=>{const q=search.value.toLocaleLowerCase('pt-BR').trim();groups.forEach(g=>{const match=g.dataset.search.includes(q);g.hidden=!match;if(q&&match){g.classList.add('open');g.querySelector('.bpm-group-head').setAttribute('aria-expanded','true')}})});
+ const map=document.getElementById('bpmValueMap'); if(!map)return;
+ const nodes=[...map.querySelectorAll('.bpm-value-node')], groups=[...map.querySelectorAll('.bpm-chain-process-group')], cards=[...map.querySelectorAll('.bpm-map-process')];
+ const search=document.getElementById('bpmSearch'), tabs=[...document.querySelectorAll('.bpm-category-tabs button')];
+ let selected=null, category='all', query='';
+ function highlight(id){selected=id;nodes.forEach(n=>{const on=n.dataset.group===id;n.classList.toggle('is-active',on);n.classList.toggle('is-muted',!!id&&!on);n.setAttribute('aria-pressed',on?'true':'false')});groups.forEach(g=>g.classList.toggle('is-related',g.dataset.group===id));cards.forEach(c=>c.classList.toggle('is-related',c.dataset.group===id));}
+ function apply(){let visible=0;cards.forEach(c=>{const okCategory=category==='all'||c.dataset.category===category;const okSearch=!query||c.dataset.search.includes(query);const show=okCategory&&okSearch;c.hidden=!show;if(show)visible++;});groups.forEach(g=>{const any=[...g.querySelectorAll('.bpm-map-process')].some(c=>!c.hidden);g.hidden=!any;});nodes.forEach(n=>{const g=groups.find(x=>x.dataset.group===n.dataset.group);n.hidden=category!=='all'&&category!=='Cadeia de Valor';if(query&&g){const ok=[...g.querySelectorAll('.bpm-map-process')].some(c=>!c.hidden);n.hidden=!ok;}});map.querySelectorAll('.bpm-map-panel').forEach(p=>{const any=[...p.querySelectorAll('.bpm-map-process')].some(c=>!c.hidden);p.hidden=category!=='all'&&p.dataset.category!==category||!any;});document.getElementById('bpmMapEmpty').hidden=visible>0;}
+ nodes.forEach(n=>{n.addEventListener('mouseenter',()=>highlight(n.dataset.group));n.addEventListener('focus',()=>highlight(n.dataset.group));n.addEventListener('mouseleave',()=>highlight(selected));n.addEventListener('blur',()=>highlight(selected));n.addEventListener('click',()=>{const id=selected===n.dataset.group?null:n.dataset.group;highlight(id);if(id){const target=groups.find(g=>g.dataset.group===id);target?.scrollIntoView({behavior:'smooth',block:'nearest'});}})});
+ cards.forEach(c=>{c.addEventListener('mouseenter',()=>highlight(c.dataset.group));c.addEventListener('focus',()=>highlight(c.dataset.group));c.addEventListener('mouseleave',()=>highlight(selected));c.addEventListener('blur',()=>highlight(selected));});
+ tabs.forEach(b=>b.addEventListener('click',()=>{tabs.forEach(x=>x.classList.toggle('active',x===b));category=b.dataset.filter;selected=null;highlight(null);apply();}));
+ search.addEventListener('input',()=>{query=search.value.toLocaleLowerCase('pt-BR').trim();selected=null;highlight(null);apply();});
+ apply();
 })();
 </script>
 {% endblock %}

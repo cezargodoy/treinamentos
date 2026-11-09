@@ -51,6 +51,22 @@ class User(Base):
     interests:Mapped[str]=mapped_column(Text,default="")
     photo_data:Mapped[bytes|None]=mapped_column(LargeBinary,nullable=True)
     photo_mime:Mapped[str]=mapped_column(String(40),default="")
+class BPMProcess(Base):
+    __tablename__="bpm_processes"
+    id:Mapped[int]=mapped_column(primary_key=True)
+    parent_id:Mapped[int|None]=mapped_column(ForeignKey("bpm_processes.id"),nullable=True,index=True)
+    code:Mapped[str]=mapped_column(String(40),unique=True,index=True)
+    name:Mapped[str]=mapped_column(String(240),index=True)
+    category:Mapped[str]=mapped_column(String(100),default="Cadeia de Valor",index=True)
+    process_type:Mapped[str]=mapped_column(String(40),default="Processo")
+    description:Mapped[str]=mapped_column(Text,default="")
+    owner_area:Mapped[str]=mapped_column(String(160),default="")
+    status:Mapped[str]=mapped_column(String(30),default="Mapeado")
+    sort_order:Mapped[int]=mapped_column(Integer,default=0)
+    active:Mapped[bool]=mapped_column(Boolean,default=True)
+    created_at:Mapped[datetime]=mapped_column(DateTime,default=datetime.utcnow)
+    updated_at:Mapped[datetime]=mapped_column(DateTime,default=datetime.utcnow,onupdate=datetime.utcnow)
+
 class Course(Base):
     __tablename__="courses"
     id:Mapped[int]=mapped_column(primary_key=True)
@@ -245,6 +261,7 @@ app.add_middleware(SessionMiddleware,secret_key=os.getenv("SECRET_KEY","developm
 os.makedirs("static/uploads",exist_ok=True)
 app.mount("/static",StaticFiles(directory="static"),name="static")
 templates=Environment(loader=FileSystemLoader("templates"),autoescape=select_autoescape(["html"]))
+seed_bpm_processes()
 oauth=OAuth()
 tenant=os.getenv("ENTRA_TENANT_ID","")
 client_id=os.getenv("ENTRA_CLIENT_ID","")
@@ -309,6 +326,85 @@ def render(name,**ctx):
 def audit(s, request, actor, action, entity_type, entity_id="", details=""):
     ip=request.client.host if request.client else ""
     s.add(AuditLog(actor_user_id=actor.id if actor else None,action=action,entity_type=entity_type,entity_id=str(entity_id),details=details[:4000],ip_address=ip))
+
+
+BPM_SEED = [
+    ("Cadeia de Valor", "Engenharias de Produtos e Soluções", [
+        "Estratégia Interna", "Customizações para clientes", "Definição do Produto", "Engenharia de Processos (DFM / DFT)",
+        "Demanda de Desenvolvimento e P&D", "Homologação de insumos", "Desenvolvimento de hardware (placas, firmware, integração de módulos)",
+        "Validação técnica", "Desenvolvimento de software embarcado (Android/Linux)", "Gestão de BOM (Bill of Materials)",
+        "Desenvolvimento de soluções digitais (MDM, Tap2Pay, etc.)", "Integração hardware + software + plataforma MDM",
+        "Prototipagem e testes de engenharia", "Certificações técnicas (PCI, Anatel, EMV, TQM, etc.)"]),
+    ("Cadeia de Valor", "Supply Chain", ["Planejamento de demanda", "Qualificação de fornecedores", "Gestão de estoque estratégico", "Compras nacionais e internacionais", "PPB (Processo Produtivo Básico)", "Importação de Peças"]),
+    ("Cadeia de Valor", "Controladoria", ["Operação Fiscal", "Precificação"]),
+    ("Cadeia de Valor", "Produção (Manufatura)", ["Contract Manufacturing", "Montagem SMT / PTH", "Integração de placas", "Montagem mecânica", "Folha de Produto", "Serialização e rastreabilidade", "Testes funcionais e confiabilidade", "Embalagem", "Inspeção"]),
+    ("Cadeia de Valor", "Logística & Distribuição", ["Armazenagem", "Partes e Peças", "Gestão de centros de distribuição", "Expedição", "Transporte para adquirentes/clientes", "Logística reversa"]),
+    ("Cadeia de Valor", "Comercial & Relacionamento", ["Vendas B2B (adquirentes, bancos, varejo)", "Gestão de contratos de vendas", "Atendimento a contas estratégicas", "Parcerias estratégicas B2B"]),
+    ("Cadeia de Valor", "Pós-Venda & Serviços", ["Assistência técnica", "RMA", "Reparos", "Atualizações de firmware", "Suporte técnico (Customer Care)", "SLA management"]),
+    ("Processos Secundários", "Processos Secundários", ["Planejamento e Controle de Produção (PCP)", "Gestão de Inventário", "Gestão de Ativos Industriais", "Planejamento de Capacidade Produtiva", "Facilities industriais", "TI Operacional (Infraestrutura, ERP, CRM, Shopfloor)", "Segurança Patrimonial"]),
+    ("Fornecedores", "Fornecedores", ["Indústria de Componentes Eletrônicos", "Indústria de Tecnologia", "Indústria de Meios de Pagamento", "Água, Energia, Internet", "Indústria de Maquinário e Equipamentos", "Indústria ODM"]),
+    ("Processos de Apoio Estratégico", "Processos de Apoio Estratégico", ["Recursos Humanos", "Jurídico & Contratos", "Marketing Institucional", "Treinamento técnico e industrial", "Governança Corporativa", "Gestão de Riscos Corporativos", "Financeiro & Controladoria", "Estratégia & Inovação"]),
+    ("Qualidade, Compliance & Segurança", "Qualidade, Compliance & Segurança", ["ISO 9001 & 14001", "Auditorias Internas/Externas", "Controle Estatístico de Processo", "Auditorias Externas", "CAPA", "Qualificação de Fornecedores", "Proteção de Firmware", "Segurança do Produto", "Segurança da Informação", "Segurança Cibernética", "Conformidade IATA", "PCI PTS / PIN / DSS", "TQM (Master Card)", "LGPD", "ANATEL e ABECs", "Normas Internacionais de Pagamento", "Institutos de Pesquisas", "Resiliência", "Gestão de Crise", "OEA"]),
+]
+
+def seed_bpm_processes():
+    s=db()
+    try:
+        if s.query(BPMProcess).count():
+            return
+        order=0
+        for category, group_name, children in BPM_SEED:
+            order += 1
+            parent_code=f"BPM-{order:02d}"
+            parent=BPMProcess(code=parent_code,name=group_name,category=category,process_type="Macroprocesso",sort_order=order,description=f"{group_name} — estrutura inicial da cadeia de valor Gertec.")
+            s.add(parent); s.flush()
+            for idx, child_name in enumerate(children,1):
+                s.add(BPMProcess(parent_id=parent.id,code=f"{parent_code}-{idx:02d}",name=child_name,category=category,process_type="Processo",sort_order=idx,owner_area=group_name))
+        s.commit()
+    finally:
+        s.close()
+@app.get("/bpm",response_class=HTMLResponse)
+def bpm_home(request:Request):
+    s=db()
+    try:
+        u=require(request,s)
+        roots=s.query(BPMProcess).filter(BPMProcess.parent_id.is_(None),BPMProcess.active.is_(True)).order_by(BPMProcess.sort_order).all()
+        tree=[]
+        for root in roots:
+            children=s.query(BPMProcess).filter_by(parent_id=root.id,active=True).order_by(BPMProcess.sort_order).all()
+            tree.append({"id":root.id,"code":root.code,"name":root.name,"category":root.category,"children":[{"id":c.id,"code":c.code,"name":c.name,"status":c.status,"owner_area":c.owner_area} for c in children]})
+        total=s.query(BPMProcess).filter_by(active=True).count()
+        return render("bpm.html",request=request,user=u,title="Gertec BPM",tree=tree,total=total,macro_count=len(roots),process_count=total-len(roots))
+    finally:s.close()
+
+@app.get("/bpm/process/{process_id}",response_class=HTMLResponse)
+def bpm_process_detail(process_id:int,request:Request):
+    s=db()
+    try:
+        u=require(request,s); item=s.get(BPMProcess,process_id)
+        if not item or not item.active: raise HTTPException(404,"Processo não encontrado")
+        parent=s.get(BPMProcess,item.parent_id) if item.parent_id else None
+        children=s.query(BPMProcess).filter_by(parent_id=item.id,active=True).order_by(BPMProcess.sort_order).all()
+        return render("bpm_process.html",request=request,user=u,title=item.name,item=item,parent=parent,children=children)
+    finally:s.close()
+
+@app.post("/bpm/process")
+def bpm_create_process(request:Request,parent_id:int|None=Form(None),name:str=Form(...),category:str=Form("Cadeia de Valor"),process_type:str=Form("Processo"),owner_area:str=Form(""),description:str=Form("")):
+    s=db()
+    try:
+        u=require(request,s,["admin","rh","gestor"])
+        name=name.strip()
+        if not name: raise HTTPException(400,"Informe o nome do processo")
+        parent=s.get(BPMProcess,parent_id) if parent_id else None
+        if parent_id and not parent: raise HTTPException(404,"Macroprocesso não encontrado")
+        prefix=parent.code if parent else "BPM-NEW"
+        count=s.query(BPMProcess).filter_by(parent_id=parent_id).count()+1
+        code=f"{prefix}-{count:02d}" if parent else f"BPM-NEW-{int(datetime.utcnow().timestamp())}"
+        item=BPMProcess(parent_id=parent_id,code=code,name=name,category=category,process_type=process_type,owner_area=owner_area,description=description,sort_order=count)
+        s.add(item);s.flush();audit(s,request,u,"bpm_process_created","BPMProcess",item.id,name);s.commit()
+        return RedirectResponse(f"/bpm/process/{item.id}",303)
+    finally:s.close()
+
 @app.get("/health")
 def health(): return {"status":"ok"}
 def password_digest(password: str) -> str:

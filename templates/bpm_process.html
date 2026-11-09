@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="bpm-page bpm-detail-page">
+  <div class="bpm-breadcrumb"><a href="/bpm">Cadeia de valor</a><span>›</span>{% if parent %}<a href="/bpm">{{ parent.name }}</a><span>›</span>{% endif %}<b>{{ item.name }}</b></div>
+  <div class="bpm-detail-hero"><div><div class="eyebrow">{{ item.category }} · {{ item.code }}</div><h1>{{ item.name }}</h1><p>{{ item.description or 'Detalhamento do processo e estruturação das atividades operacionais.' }}</p></div><span class="bpm-status">{{ item.status }}</span></div>
+  <div class="bpm-detail-stats"><div><small>TIPO</small><strong>{{ item.process_type }}</strong></div><div><small>ÁREA RESPONSÁVEL</small><strong>{{ item.owner_area or 'A definir' }}</strong></div><div><small>SUBPROCESSOS / ETAPAS</small><strong>{{ children|length }}</strong></div><div><small>MODELAGEM</small><strong>Em preparação</strong></div></div>
+  <div class="bpm-section-head"><div><div class="eyebrow">DECOMPOSIÇÃO DO PROCESSO</div><h2>Subprocessos e atividades</h2><p>Esta estrutura será usada para desenhar o fluxo, atribuir responsáveis e configurar as regras de execução.</p></div></div>
+  {% if children %}<div class="bpm-process-list bpm-detail-list">{% for child in children %}<a class="bpm-process" href="/bpm/process/{{ child.id }}"><span class="bpm-process-code">{{ child.code }}</span><strong>{{ child.name }}</strong><span class="bpm-process-arrow">→</span></a>{% endfor %}</div>{% else %}<div class="bpm-empty"><span>◇</span><h3>Estrutura pronta para detalhamento</h3><p>Adicione subprocessos para decompor este processo em etapas operacionais.</p></div>{% endif %}
+  {% if user.role in ["admin", "rh", "gestor"] %}
+  <div class="bpm-add-panel"><div><div class="eyebrow">EXPANSÃO DA HIERARQUIA</div><h3>Adicionar subprocesso ou etapa</h3><p>Inclua novos níveis de detalhamento sem alterar a estrutura já cadastrada.</p></div><form method="post" action="/bpm/process" class="bpm-add-form"><input type="hidden" name="parent_id" value="{{ item.id }}"><input type="hidden" name="category" value="{{ item.category }}"><input type="hidden" name="process_type" value="Subprocesso"><input name="name" required maxlength="240" placeholder="Nome do subprocesso ou etapa"><input name="owner_area" maxlength="160" placeholder="Área responsável (opcional)"><button class="btn" type="submit">Adicionar</button></form></div>
+  {% endif %}
+  <div class="bpm-next-grid"><div class="bpm-next-card"><span>01</span><h3>Modelagem BPMN</h3><p>Desenhe eventos, tarefas, decisões, raias e conexões do fluxo.</p><small>Próxima etapa do desenvolvimento</small></div><div class="bpm-next-card"><span>02</span><h3>Playbooks</h3><p>Vincule procedimentos, checklists, documentos e critérios de execução.</p><small>Próxima etapa do desenvolvimento</small></div><div class="bpm-next-card"><span>03</span><h3>Indicadores e SLA</h3><p>Acompanhe prazos, responsáveis, gargalos e desempenho operacional.</p><small>Próxima etapa do desenvolvimento</small></div></div>
+  <a class="btn secondary" href="/bpm">← Voltar à cadeia de valor</a>
+</div>
+{% endblock %}

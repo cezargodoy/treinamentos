@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="bpm-page">
+  <div class="bpm-hero">
+    <div><div class="eyebrow">GESTÃO CORPORATIVA DE PROCESSOS</div><h1>Cadeia de valor Gertec</h1><p>Explore os macroprocessos, aprofunde os processos e conecte cada etapa à sua execução operacional.</p></div>
+    <div class="bpm-hero-actions"><span class="bpm-live"><i></i> Estrutura inicial cadastrada</span><a class="btn" href="#bpm-groups">Explorar processos ↓</a></div>
+  </div>
+  <div class="bpm-metrics"><div class="bpm-metric"><small>MACROPROCESSOS / GRUPOS</small><strong>{{ macro_count }}</strong><span>Estruturas da cadeia de valor</span></div><div class="bpm-metric"><small>PROCESSOS CADASTRADOS</small><strong>{{ process_count }}</strong><span>Itens importados da referência</span></div><div class="bpm-metric"><small>TOTAL DE REGISTROS</small><strong>{{ total }}</strong><span>Hierarquia pronta para expansão</span></div><div class="bpm-metric bpm-metric-highlight"><small>PRÓXIMA EVOLUÇÃO</small><strong>BPMN 2.0</strong><span>Modelagem e execução de workflows</span></div></div>
+  <div class="bpm-section-head" id="bpm-groups"><div><div class="eyebrow">MAPA INTERATIVO</div><h2>Visão macro da organização</h2><p>Selecione um bloco para visualizar seus processos e abrir o detalhamento.</p></div><div class="bpm-search"><span>⌕</span><input id="bpmSearch" type="search" placeholder="Buscar processo ou área..."></div></div>
+  <div class="bpm-category-tabs"><button class="active" data-filter="all">Todos</button><button data-filter="Cadeia de Valor">Cadeia de valor</button><button data-filter="Processos Secundários">Secundários</button><button data-filter="Fornecedores">Fornecedores</button><button data-filter="Processos de Apoio Estratégico">Apoio estratégico</button><button data-filter="Qualidade, Compliance & Segurança">Qualidade, compliance & segurança</button></div>
+  <div class="bpm-grid" id="bpmGrid">
+  {% for group in tree %}
+    <section class="bpm-group" data-category="{{ group.category }}" data-search="{{ (group.name ~ ' ' ~ (group.children|map(attribute='name')|join(' ')))|lower }}">
+      <button class="bpm-group-head" type="button" aria-expanded="false"><span class="bpm-group-icon">{% if group.category=='Cadeia de Valor' %}↗{% elif group.category=='Fornecedores' %}◇{% elif group.category=='Qualidade, Compliance & Segurança' %}✓{% else %}▦{% endif %}</span><span class="bpm-group-title"><small>{{ group.category }}</small><strong>{{ group.name }}</strong><em>{{ group.children|length }} processos mapeados</em></span><span class="bpm-chevron">⌄</span></button>
+      <div class="bpm-group-body"><div class="bpm-process-list">{% for child in group.children %}<a class="bpm-process" href="/bpm/process/{{ child.id }}"><span class="bpm-process-code">{{ child.code }}</span><strong>{{ child.name }}</strong><span class="bpm-process-arrow">→</span></a>{% endfor %}</div></div>
+    </section>
+  {% endfor %}
+  </div>
+  <div class="bpm-footer-note"><span>GERTEC BPM</span><p>Estrutura de referência baseada na cadeia de valor fornecida. Os responsáveis, fluxos, indicadores e playbooks serão configurados progressivamente pelas áreas.</p></div>
+</div>
+<script>
+(function(){
+ const groups=[...document.querySelectorAll('.bpm-group')], search=document.getElementById('bpmSearch');
+ groups.forEach(g=>g.querySelector('.bpm-group-head').addEventListener('click',()=>{g.classList.toggle('open');g.querySelector('.bpm-group-head').setAttribute('aria-expanded',g.classList.contains('open')?'true':'false')}));
+ document.querySelectorAll('.bpm-category-tabs button').forEach(b=>b.addEventListener('click',()=>{document.querySelectorAll('.bpm-category-tabs button').forEach(x=>x.classList.remove('active'));b.classList.add('active');groups.forEach(g=>g.hidden=b.dataset.filter!=='all'&&g.dataset.category!==b.dataset.filter)}));
+ search.addEventListener('input',()=>{const q=search.value.toLocaleLowerCase('pt-BR').trim();groups.forEach(g=>{const match=g.dataset.search.includes(q);g.hidden=!match;if(q&&match){g.classList.add('open');g.querySelector('.bpm-group-head').setAttribute('aria-expanded','true')}})});
+})();
+</script>
+{% endblock %}

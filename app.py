@@ -346,6 +346,7 @@ class GRCFinding(Base):
     owner:Mapped[str]=mapped_column(String(180),default="")
     description:Mapped[str]=mapped_column(Text,default="")
     action_plan:Mapped[str]=mapped_column(Text,default="")
+    control_id:Mapped[int|None]=mapped_column(ForeignKey("grc_controls.id"),nullable=True)
     due_date:Mapped[str]=mapped_column(String(20),default="")
     status:Mapped[str]=mapped_column(String(30),default="Aberta")
     created_by:Mapped[int|None]=mapped_column(ForeignKey("users.id"),nullable=True)
@@ -409,6 +410,9 @@ class BCMProcessLink(Base):
 Base.metadata.create_all(engine)
 # Compatibilidade com bancos criados por versões anteriores do MVP.
 from sqlalchemy import inspect, text
+with engine.begin() as conn:
+    finding_cols={c["name"] for c in inspect(engine).get_columns("grc_findings")}
+    if "control_id" not in finding_cols: conn.execute(text("ALTER TABLE grc_findings ADD COLUMN control_id INTEGER NULL"))
 if "password_hash" not in [c["name"] for c in inspect(engine).get_columns("users")]:
     with engine.begin() as conn:
         conn.execute(text("ALTER TABLE users ADD COLUMN password_hash VARCHAR(300)"))
@@ -501,10 +505,12 @@ def require(request,s,roles=None):
     effective_roles=set([u.role]+group_roles)
     if roles and not effective_roles.intersection(roles): raise HTTPException(403,"Acesso não autorizado.")
     path=request.url.path
-    module=("reports" if path.startswith("/reports") else "users" if path.startswith("/admin/users") else "courses" if path.startswith(("/courses","/learn")) else "campaigns" if path.startswith("/campaigns") else "forum" if path.startswith("/forum") else "certificates" if path.startswith("/certificates") else "dashboard" if path=="/" else None)
+    module=("academy" if path.startswith(("/academy","/courses","/learn","/campaigns","/reports","/certificates")) else "bpm" if path.startswith("/bpm") else "bcm" if path.startswith("/bcm") else "grc" if path.startswith("/grc") else "forum" if path.startswith("/forum") else "dashboard" if path=="/" else None)
+    if module in MODULES and not module_enabled(module): raise HTTPException(404,"Este módulo está desabilitado globalmente pelo administrador.")
     if module and "admin" not in effective_roles:
         role_perms=[s.query(RoleModule).filter_by(role=role,module=module).first() for role in effective_roles if role in ("rh","gestor","colaborador")]
-        if role_perms and not any(x.enabled for x in role_perms if x is not None) and all(x is not None for x in role_perms):
+        configured=[x for x in role_perms if x is not None]
+        if configured and not any(x.enabled for x in configured):
             raise HTTPException(403,"Seu perfil não possui acesso a este módulo.")
     return u
 def render(name,**ctx):
@@ -519,6 +525,7 @@ def render(name,**ctx):
         "communications.html", "settings.html", "setup.html"
     }
     ctx.setdefault("academy_mode", name in academy_templates)
+    ctx.setdefault("module_states", {k: module_enabled(k) for k in MODULES})
     return HTMLResponse(templates.get_template(name).render(**ctx))
 def audit(s, request, actor, action, entity_type, entity_id="", details=""):
     ip=request.client.host if request.client else ""
@@ -823,7 +830,7 @@ def workplace_home(request:Request):
         bpm_roots=bpm_roots,bpm_documents=bpm_documents,
         my_enrollments=len(enrollments),my_in_progress=in_progress,
         my_pending=pending,my_completed=completed,
-        is_admin=u.role in ("admin","rh","gestor")
+        is_admin=u.role in ("admin","rh","gestor"), module_states={k:module_enabled(k) for k in MODULES}
     )
     s.close()
     return render("workplace.html",**ctx)
@@ -1507,6 +1514,38 @@ async def save_permissions(request:Request):
             if not row:s.add(RoleModule(role=role,module=module,enabled=enabled))
             else:row.enabled=enabled
     s.commit();s.close();return RedirectResponse("/admin/permissions",303)
+MODULES = {"academy":"Gertec Academy","bpm":"Gertec BPM","bcm":"Gertec BCM","grc":"Gertec GRC"}
+
+def module_enabled(key):
+    return get_setting(f"module_{key}", "1") != "0"
+
+@app.get("/workplace/access",response_class=HTMLResponse)
+def workplace_access(request:Request):
+    s=db();actor=require(request,s,["admin"])
+    users=s.query(User).order_by(User.name).all();groups=s.query(UserGroup).order_by(UserGroup.name).all()
+    roles=["admin","rh","gestor","colaborador"]
+    matrix={(x.role,x.module):x.enabled for x in s.query(RoleModule).all()}
+    result=render("workplace_access.html",user=actor,users=users,groups=groups,roles=roles,modules=MODULES,matrix=matrix)
+    s.close();return result
+
+@app.post("/workplace/access/permissions")
+def workplace_access_permissions(request:Request,role:str=Form(...),module:str=Form(...),enabled:str=Form("0")):
+    s=db();actor=require(request,s,["admin"])
+    if role not in ("admin","rh","gestor","colaborador") or module not in MODULES:
+        s.close();raise HTTPException(400,"Perfil ou módulo inválido.")
+    row=s.query(RoleModule).filter_by(role=role,module=module).first()
+    if not row: row=RoleModule(role=role,module=module,enabled=enabled=="1");s.add(row)
+    else: row.enabled=enabled=="1"
+    audit(s,request,actor,"access.permission.updated","role_module",f"{role}:{module}",f"enabled={enabled}")
+    s.commit();s.close();return RedirectResponse("/workplace/access",303)
+
+@app.post("/workplace/modules")
+def workplace_modules(request:Request,academy:str=Form("0"),bpm:str=Form("0"),bcm:str=Form("0"),grc:str=Form("0")):
+    s=db();actor=require(request,s,["admin"])
+    for key,value in {"academy":academy,"bpm":bpm,"bcm":bcm,"grc":grc}.items(): set_setting(s,f"module_{key}","1" if value=="1" else "0")
+    audit(s,request,actor,"modules.global.updated","modules","global","Status dos módulos atualizado")
+    s.commit();s.close();return RedirectResponse("/admin/settings?modules_saved=1",303)
+
 @app.get("/workplace/admin",response_class=HTMLResponse)
 def workplace_admin(request:Request):
     s=db();u=require(request,s,["admin"])
@@ -1554,7 +1593,16 @@ def workplace_notification_broadcast(request:Request,title:str=Form(...),message
 @app.get("/bcm",response_class=HTMLResponse)
 def bcm_home(request:Request):
     s=db();u=require(request,s)
+    # Sincroniza automaticamente processos primários e secundários do BPM para a BIA.
+    # Subprocessos (parent_id preenchido) são deliberadamente excluídos.
+    root_processes=s.query(BPMProcess).filter(BPMProcess.active.is_(True),BPMProcess.process_type=="Processo",BPMProcess.category.in_(["Cadeia de Valor","Processos Secundários"])).order_by(BPMProcess.sort_order,BPMProcess.code).all()
+    existing_codes={x.process_code for x in s.query(BCMBIA.process_code).all() if x.process_code}
+    for proc in root_processes:
+        if proc.code not in existing_codes:
+            s.add(BCMBIA(activity=proc.name,department=proc.owner_area or "",process_code=proc.code,description="Processo sincronizado automaticamente a partir do Gertec BPM.",criticality="Em avaliação",status="Pendente"))
+    s.commit()
     bia=s.query(BCMBIA).order_by(BCMBIA.updated_at.desc()).all()
+    bia_ranking=sorted(bia,key=lambda x: ({"Crítica":0,"Alta":1,"Média":2,"Baixa":3,"Em avaliação":4}.get(x.criticality,5), x.rto_hours or 9999))
     plans=s.query(BCMPlan).order_by(BCMPlan.updated_at.desc()).all()
     resources=s.query(BCMResource).order_by(BCMResource.name).all()
     exercises=s.query(BCMExercise).order_by(BCMExercise.created_at.desc()).all()
@@ -1563,7 +1611,7 @@ def bcm_home(request:Request):
     process_map={x.id:x for x in processes}
     linked_processes={x.id:[process_map[l.process_id] for l in process_links if l.bia_id==x.id and l.process_id in process_map] for x in bia}
     counts={"bia":len(bia),"critical":sum(1 for x in bia if x.criticality=="Crítica"),"bcp":sum(1 for x in plans if x.plan_type=="BCP"),"drp":sum(1 for x in plans if x.plan_type=="DRP")}
-    result=render("bcm.html",user=u,bia=bia,plans=plans,resources=resources,exercises=exercises,counts=counts,processes=processes,linked_processes=linked_processes)
+    result=render("bcm.html",user=u,bia=bia,plans=plans,resources=resources,exercises=exercises,counts=counts,processes=processes,linked_processes=linked_processes,bia_ranking=bia_ranking)
     s.close();return result
 
 @app.post("/bcm/bia")
@@ -1631,7 +1679,8 @@ def grc_home(request:Request):
     linked_processes={r.id:[process_map[x.process_id] for x in risk_process_links if x.risk_id==r.id and x.process_id in process_map] for r in risks}
     linked_controls={r.id:[control_map[x.control_id] for x in risk_control_links if x.risk_id==r.id and x.control_id in control_map] for r in risks}
     counts={"risks":len(risks),"high":sum(1 for r in risks if r.inherent_score>=15 and r.status!="Encerrado"),"controls":len(controls),"findings":sum(1 for f in findings if f.status!="Concluída")}
-    result=render("grc.html",user=u,risks=risks,controls=controls,findings=findings,counts=counts,processes=processes,linked_processes=linked_processes,linked_controls=linked_controls)
+    heatmap=[[ [r for r in risks if r.likelihood==p and r.impact==i] for i in range(1,6)] for p in range(5,0,-1)]
+    result=render("grc.html",user=u,risks=risks,controls=controls,findings=findings,counts=counts,processes=processes,linked_processes=linked_processes,linked_controls=linked_controls,heatmap=heatmap)
     s.close();return result
 
 @app.post("/grc/risks")
@@ -1661,11 +1710,11 @@ def grc_create_control(request:Request,code:str=Form(...),framework:str=Form("IS
     return RedirectResponse("/grc#controls",303)
 
 @app.post("/grc/findings")
-def grc_create_finding(request:Request,title:str=Form(...),source:str=Form("Auditoria interna"),severity:str=Form("Média"),department:str=Form(""),owner:str=Form(""),description:str=Form(""),action_plan:str=Form(""),due_date:str=Form("")):
+def grc_create_finding(request:Request,title:str=Form(...),source:str=Form("Auditoria interna"),severity:str=Form("Média"),department:str=Form(""),owner:str=Form(""),description:str=Form(""),action_plan:str=Form(""),due_date:str=Form(""),control_id:int=Form(0)):
     s=db();u=require(request,s,["admin","rh","gestor"])
     if not title.strip():s.close();raise HTTPException(400,"Informe o título do apontamento.")
     code=f"NC-{datetime.utcnow():%y%m%d}-{secrets.token_hex(2).upper()}"
-    row=GRCFinding(code=code,title=title.strip(),source=source,severity=severity,department=department.strip(),owner=owner.strip(),description=description.strip(),action_plan=action_plan.strip(),due_date=due_date,created_by=u.id)
+    row=GRCFinding(code=code,title=title.strip(),source=source,severity=severity,department=department.strip(),owner=owner.strip(),description=description.strip(),action_plan=action_plan.strip(),control_id=(control_id or None),due_date=due_date,created_by=u.id)
     s.add(row);audit(s,request,u,"grc.finding.created","grc_finding",code,title);s.commit();s.close()
     return RedirectResponse("/grc#findings",303)
 
@@ -1848,7 +1897,8 @@ def admin_settings(request:Request):
              "has_client_secret":bool(val("entra_client_secret")),"language":val("language") or "pt-BR","timezone":val("timezone") or "America/Sao_Paulo",
              "smtp_host":val("smtp_host"),"smtp_port":val("smtp_port") or "587",
              "smtp_user":val("smtp_user"),"has_smtp_password":bool(val("smtp_password")),
-             "smtp_from":val("smtp_from") or val("smtp_user")}
+             "smtp_from":val("smtp_from") or val("smtp_user"),
+             "get_module_state":module_enabled}
     # Renderizar enquanto a sessão está aberta evita DetachedInstanceError
     # ao acessar propriedades do usuário no template base.
     result=render("settings.html",**context)

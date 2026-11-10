@@ -29,26 +29,26 @@
 
 <div class="workplace-section-head"><div><div class="eyebrow">PLATAFORMA CORPORATIVA</div><h2>Seus módulos</h2><p>Acesse as soluções integradas conforme seu perfil e suas permissões.</p></div></div>
 <div class="workplace-module-grid">
-  <a class="workplace-module-card academy" href="/academy">
+  {% if module_states.get("academy", true) %}<a class="workplace-module-card academy" href="/academy">
     <div class="workplace-module-top"><span class="workplace-module-icon">▤</span><span class="module-state live">Disponível</span></div>
     <h3>Gertec Academy</h3><p>Universidade corporativa, cursos, campanhas, avaliações, certificados e trilhas de aprendizagem.</p>
     <span class="module-link">Acessar Academy <b>→</b></span>
-  </a>
-  <a class="workplace-module-card bpm" href="/bpm">
+  </a>{% endif %}
+  {% if module_states.get("bpm", true) %}<a class="workplace-module-card bpm" href="/bpm">
     <div class="workplace-module-top"><span class="workplace-module-icon">⌘</span><span class="module-state live">Disponível</span></div>
     <h3>Gertec BPM</h3><p>Cadeia de valor, processos, subprocessos, documentação, modelagem BPMN e playbooks.</p>
     <span class="module-link">Acessar BPM <b>→</b></span>
-  </a>
-  <a class="workplace-module-card bcm" href="/bcm">
+  </a>{% endif %}
+  {% if module_states.get("bcm", true) %}<a class="workplace-module-card bcm" href="/bcm">
     <div class="workplace-module-top"><span class="workplace-module-icon">▦</span><span class="module-state live">Disponível</span></div>
     <h3>Gertec BCM</h3><p>Business Impact Analysis, continuidade de negócios, BCP e recuperação de desastres.</p>
     <span class="module-link">Acessar BCM <b>→</b></span>
-  </a>
-  <a class="workplace-module-card bcm" href="/grc">
+  </a>{% endif %}
+  {% if module_states.get("grc", true) %}<a class="workplace-module-card bcm" href="/grc">
     <div class="workplace-module-top"><span class="workplace-module-icon">◈</span><span class="module-state live">Disponível</span></div>
     <h3>Gertec GRC</h3><p>Riscos corporativos, requisitos normativos, controles, auditorias, não conformidades e planos de ação.</p>
     <span class="module-link">Acessar GRC <b>→</b></span>
-  </a>
+  </a>{% endif %}
   <article class="workplace-module-card planned">
     <div class="workplace-module-top"><span class="workplace-module-icon">♙</span><span class="module-state">Planejado</span></div>
     <h3>Gertec People</h3><p>Estrutura organizacional, competências, desenvolvimento e jornada do colaborador.</p>

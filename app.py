@@ -407,31 +407,30 @@ class BCMProcessLink(Base):
     created_at:Mapped[datetime]=mapped_column(DateTime,default=datetime.utcnow)
 
 
-
 class LegalTicket(Base):
     __tablename__="legal_tickets"
     id:Mapped[int]=mapped_column(primary_key=True)
-    protocol:Mapped[str]=mapped_column(String(30),unique=True,index=True)
-    subject:Mapped[str]=mapped_column(String(240),index=True)
-    request_type:Mapped[str]=mapped_column(String(80),default="Contrato")
-    department:Mapped[str]=mapped_column(String(160),default="")
-    requester:Mapped[str]=mapped_column(String(180),default="")
-    requester_email:Mapped[str]=mapped_column(String(240),default="")
-    counterparty:Mapped[str]=mapped_column(String(240),default="")
+    code:Mapped[str]=mapped_column(String(32),unique=True,index=True)
+    title:Mapped[str]=mapped_column(String(240),index=True)
+    request_type:Mapped[str]=mapped_column(String(60),default="Contrato")
+    requester_name:Mapped[str]=mapped_column(String(180),default="")
+    requester_user_id:Mapped[int|None]=mapped_column(ForeignKey("users.id"),nullable=True,index=True)
+    requester_department:Mapped[str]=mapped_column(String(160),default="")
+    partner_name:Mapped[str]=mapped_column(String(240),default="")
+    partner_type:Mapped[str]=mapped_column(String(40),default="Parceiro")
     description:Mapped[str]=mapped_column(Text,default="")
+    responsible:Mapped[str]=mapped_column(String(180),default="Jurídico")
+    status:Mapped[str]=mapped_column(String(40),default="Recebido")
     priority:Mapped[str]=mapped_column(String(30),default="Normal")
-    status:Mapped[str]=mapped_column(String(40),default="Recebido",index=True)
-    responsible:Mapped[str]=mapped_column(String(180),default="")
     sla_hours:Mapped[int]=mapped_column(Integer,default=72)
-    due_at:Mapped[datetime]=mapped_column(DateTime,index=True)
-    closed_at:Mapped[datetime|None]=mapped_column(DateTime,nullable=True)
-    resolution:Mapped[str]=mapped_column(Text,default="")
-    document_name:Mapped[str]=mapped_column(String(240),default="")
-    document_mime:Mapped[str]=mapped_column(String(100),default="")
-    document_data:Mapped[bytes|None]=mapped_column(LargeBinary,nullable=True)
-    created_by:Mapped[int|None]=mapped_column(ForeignKey("users.id"),nullable=True)
     created_at:Mapped[datetime]=mapped_column(DateTime,default=datetime.utcnow,index=True)
     updated_at:Mapped[datetime]=mapped_column(DateTime,default=datetime.utcnow,onupdate=datetime.utcnow)
+    closed_at:Mapped[datetime|None]=mapped_column(DateTime,nullable=True)
+    attachment_name:Mapped[str]=mapped_column(String(240),default="")
+    attachment_mime:Mapped[str]=mapped_column(String(100),default="")
+    attachment_data:Mapped[bytes|None]=mapped_column(LargeBinary,nullable=True)
+    created_by:Mapped[int|None]=mapped_column(ForeignKey("users.id"),nullable=True)
+
 
 Base.metadata.create_all(engine)
 # Compatibilidade com bancos criados por versões anteriores do MVP.
@@ -534,7 +533,7 @@ def require(request,s,roles=None):
     module=("academy" if path.startswith(("/academy","/courses","/learn","/campaigns","/reports","/certificates")) else "bpm" if path.startswith("/bpm") else "bcm" if path.startswith("/bcm") else "grc" if path.startswith("/grc") else "legal" if path.startswith("/legal") else "forum" if path.startswith("/forum") else "dashboard" if path=="/" else None)
     if module in MODULES and not module_enabled(module): raise HTTPException(404,"Este módulo está desabilitado globalmente pelo administrador.")
     if module and "admin" not in effective_roles:
-        role_perms=[s.query(RoleModule).filter_by(role=role,module=module).first() for role in effective_roles if role in ("rh","gestor","colaborador")]
+        role_perms=[s.query(RoleModule).filter_by(role=role,module=module).first() for role in effective_roles if role in ("rh","gestor","colaborador","juridico")]
         configured=[x for x in role_perms if x is not None]
         if configured and not any(x.enabled for x in configured):
             raise HTTPException(403,"Seu perfil não possui acesso a este módulo.")
@@ -808,7 +807,7 @@ def edit_user(uid:int,request:Request,name:str=Form(...),email:str=Form(...),dep
     s.commit();s.close();return RedirectResponse("/admin/users",303)
 @app.post("/admin/learner-mode")
 def learner_mode(request:Request,enabled:str=Form("")):
-    s=db();u=require(request,s,["admin"]);request.session["learner_view"]=(enabled=="on");s.close();return RedirectResponse("/",303)
+    s=db();u=require(request,s,["admin"]);request.session["learner_view"]=(enabled=="on");s.close();return RedirectResponse("/academy",303)
 @app.get("/auth/callback",name="auth_callback")
 async def auth_callback(request:Request):
     entra=entra_client()
@@ -1166,7 +1165,7 @@ async def learning_event(request:Request):
             issue_campaign_certificate_if_complete(s,u.id,e.campaign_id)
         elif not s.query(Certificate).filter_by(user_id=u.id,course_id=cid,campaign_id=None).first():
             s.add(Certificate(code="GAC-"+secrets.token_hex(6).upper(),user_id=u.id,course_id=cid))
-    s.commit();result={"progress":e.progress,"watched_seconds":e.watched_seconds,"status":e.status};s.close();return result
+    s.commit();result={"progress":e.progress,"watched_seconds":e.watched_seconds,"status":e.status,"redirect_url":learning_completion_destination(s,e) if e.status=="Concluído" else None};s.close();return result
 
 @app.post("/learn/{cid}/complete")
 def complete(cid:int,request:Request):
@@ -1181,7 +1180,7 @@ def complete(cid:int,request:Request):
     else:
         cert=s.query(Certificate).filter_by(user_id=u.id,course_id=cid,campaign_id=None).first()
         if not cert:s.add(Certificate(code="GAC-"+secrets.token_hex(6).upper(),user_id=u.id,course_id=cid))
-    s.commit();s.close();return RedirectResponse("/certificates",303)
+    destination=learning_completion_destination(s,e);s.commit();s.close();return RedirectResponse(destination,303)
 @app.post("/courses/{cid}/assessment")
 def save_assessment(cid:int,request:Request,title:str=Form("Avaliação"),passing_score:int=Form(70),max_attempts:int=Form(2),question:list[str]=Form([]),answer:list[str]=Form([]),publish:str=Form("")):
     s=db();actor=require(request,s,["admin","rh"]);course=s.get(Course,cid)
@@ -1217,7 +1216,7 @@ def submit_assessment(cid:int,request:Request,answers:list[str]=Form([])):
             issue_campaign_certificate_if_complete(s,u.id,enrollment.campaign_id)
         elif not s.query(Certificate).filter_by(user_id=u.id,course_id=cid,campaign_id=None).first():
             s.add(Certificate(code="GAC-"+secrets.token_hex(6).upper(),user_id=u.id,course_id=cid))
-    s.commit();s.close();return RedirectResponse(f"/learn/{cid}?assessment_score={score}&passed={1 if passed else 0}",303)
+    destination=learning_completion_destination(s,enrollment) if passed else f"/learn/{cid}?assessment_score={score}&passed=0";s.commit();s.close();return RedirectResponse(destination,303)
 @app.get("/certificates",response_class=HTMLResponse)
 def certificates(request:Request):
     s=db();u=require(request,s);q=s.query(Certificate)
@@ -1506,12 +1505,12 @@ def module_allowed(s,u,module):
 def groups_page(request:Request):
     s=db();u=require(request,s,["admin","rh"]);groups=s.query(UserGroup).order_by(UserGroup.name).all();users=s.query(User).filter_by(active=True).order_by(User.name).all()
     data=[(g,[s.get(User,m.user_id) for m in s.query(GroupMember).filter_by(group_id=g.id).all()]) for g in groups];s.close()
-    return render("groups.html",user=u,groups=data,users=users,access_roles=[("colaborador","Colaborador"),("gestor","Gestor"),("rh","RH")])
+    return render("groups.html",user=u,groups=data,users=users,access_roles=[("colaborador","Colaborador"),("gestor","Gestor"),("rh","RH"),("juridico","Jurídico") ])
 @app.post("/admin/groups")
 def create_group(request:Request,name:str=Form(...),description:str=Form(""),access_role:str=Form("colaborador"),user_ids:list[int]=Form([])):
     s=db();require(request,s,["admin","rh"]);name=name.strip()
     if not name or s.query(UserGroup).filter(func.lower(UserGroup.name)==name.lower()).first(): s.close();raise HTTPException(400,"Nome de grupo inválido ou já existente.")
-    access_role=access_role if access_role in ("colaborador","gestor","rh") else "colaborador"
+    access_role=access_role if access_role in ("colaborador","gestor","rh","juridico") else "colaborador"
     g=UserGroup(name=name,description=description,access_role=access_role);s.add(g);s.flush()
     for uid in set(user_ids):
         if s.get(User,uid):s.add(GroupMember(group_id=g.id,user_id=uid))
@@ -1520,7 +1519,7 @@ def create_group(request:Request,name:str=Form(...),description:str=Form(""),acc
 def update_group_members(gid:int,request:Request,user_ids:list[int]=Form([]),access_role:str=Form("colaborador"),description:str=Form("")):
     s=db();require(request,s,["admin","rh"]);g=s.get(UserGroup,gid)
     if not g:s.close();raise HTTPException(404)
-    g.access_role=access_role if access_role in ("colaborador","gestor","rh") else "colaborador"
+    g.access_role=access_role if access_role in ("colaborador","gestor","rh","juridico") else "colaborador"
     g.description=description
     s.query(GroupMember).filter_by(group_id=gid).delete()
     for uid in set(user_ids):
@@ -1528,12 +1527,12 @@ def update_group_members(gid:int,request:Request,user_ids:list[int]=Form([]),acc
     s.commit();s.close();return RedirectResponse("/admin/groups",303)
 @app.get("/admin/permissions",response_class=HTMLResponse)
 def permissions_page(request:Request):
-    s=db();u=require(request,s,["admin"]);roles=["rh","gestor","colaborador"];perms={(x.role,x.module):x.enabled for x in s.query(RoleModule).all()};s.close()
+    s=db();u=require(request,s,["admin"]);roles=["rh","gestor","colaborador","juridico"];perms={(x.role,x.module):x.enabled for x in s.query(RoleModule).all()};s.close()
     return render("permissions.html",user=u,roles=roles,modules=MODULES,perms=perms)
 @app.post("/admin/permissions")
 async def save_permissions(request:Request):
     s=db();require(request,s,["admin"]);form=await request.form()
-    for role in ["rh","gestor","colaborador"]:
+    for role in ["rh","gestor","colaborador","juridico"]:
         for module in MODULES:
             enabled=(f"{role}:{module}" in form)
             row=s.query(RoleModule).filter_by(role=role,module=module).first()
@@ -1549,7 +1548,7 @@ def module_enabled(key):
 def workplace_access(request:Request):
     s=db();actor=require(request,s,["admin"])
     users=s.query(User).order_by(User.name).all();groups=s.query(UserGroup).order_by(UserGroup.name).all()
-    roles=["admin","rh","gestor","colaborador"]
+    roles=["admin","rh","gestor","colaborador","juridico"]
     matrix={(x.role,x.module):x.enabled for x in s.query(RoleModule).all()}
     result=render("workplace_access.html",user=actor,users=users,groups=groups,roles=roles,modules=MODULES,matrix=matrix)
     s.close();return result
@@ -1557,7 +1556,7 @@ def workplace_access(request:Request):
 @app.post("/workplace/access/permissions")
 def workplace_access_permissions(request:Request,role:str=Form(...),module:str=Form(...),enabled:str=Form("0")):
     s=db();actor=require(request,s,["admin"])
-    if role not in ("admin","rh","gestor","colaborador") or module not in MODULES:
+    if role not in ("admin","rh","gestor","colaborador","juridico") or module not in MODULES:
         s.close();raise HTTPException(400,"Perfil ou módulo inválido.")
     row=s.query(RoleModule).filter_by(role=role,module=module).first()
     if not row: row=RoleModule(role=role,module=module,enabled=enabled=="1");s.add(row)
@@ -2006,6 +2005,14 @@ def send_campaign_email(request:Request,campaign_id:int=Form(...),subject:str=Fo
     s.close()
     return RedirectResponse(f"/admin/communications?sent={sent}&failed={failed}",303)
 
+def learning_completion_destination(s, enrollment):
+    """Only send a learner to certificates when every item in the campaign is complete."""
+    if enrollment and enrollment.campaign_id:
+        remaining=s.query(Enrollment).filter_by(user_id=enrollment.user_id,campaign_id=enrollment.campaign_id).filter(Enrollment.status!="Concluído").count()
+        return "/certificates" if remaining == 0 else "/academy"
+    return "/certificates"
+
+
 def issue_campaign_certificate_if_complete(s, user_id:int, campaign_id:int):
     campaign=s.get(Campaign,campaign_id)
     enrollments=s.query(Enrollment).filter_by(user_id=user_id,campaign_id=campaign_id).all()
@@ -2019,69 +2026,64 @@ def issue_campaign_certificate_if_complete(s, user_id:int, campaign_id:int):
 
 
 
-# ---------------- GERTEC JURIDICO ----------------
+# Gertec Jurídico — gestão de solicitações, contratos, NDA e SLA
 def legal_sla_state(ticket, now=None):
     now=now or datetime.utcnow()
-    if ticket.status in ("Concluído","Cancelado"):
-        end=ticket.closed_at or now
-        return "within" if end <= ticket.due_at else "breached"
-    return "breached" if now > ticket.due_at else ("warning" if (ticket.due_at-now).total_seconds() <= 8*3600 else "within")
+    due=ticket.created_at + __import__("datetime").timedelta(hours=max(1,ticket.sla_hours))
+    end=ticket.closed_at or now
+    if ticket.closed_at: return ("Concluído no SLA" if ticket.closed_at<=due else "Concluído fora do SLA"), due
+    if end > due: return "Estourado", due
+    remaining=(due-now).total_seconds()
+    if remaining <= 0: return "Estourado", due
+    if remaining <= 8*3600: return "Atenção", due
+    return "Dentro do SLA", due
 
 @app.get("/legal",response_class=HTMLResponse)
 def legal_home(request:Request):
     s=db();u=require(request,s)
-    tickets=s.query(LegalTicket).order_by(LegalTicket.created_at.desc()).all()
-    now=datetime.utcnow()
-    states=[(t,legal_sla_state(t,now)) for t in tickets]
-    open_items=[t for t in tickets if t.status not in ("Concluído","Cancelado")]
-    closed=[t for t in tickets if t.status=="Concluído"]
-    within=sum(1 for t in closed if legal_sla_state(t,now)=="within")
-    outside=sum(1 for t in closed if legal_sla_state(t,now)=="breached")
-    avg_hours=round(sum(((t.closed_at or now)-t.created_at).total_seconds()/3600 for t in closed)/len(closed),1) if closed else 0
-    counts={"total":len(tickets),"open":len(open_items),"closed":len(closed),"within":within,"outside":outside,"overdue":sum(1 for t in open_items if legal_sla_state(t,now)=="breached"),"avg_hours":avg_hours}
-    result=render("legal.html",user=u,title="Gertec Jurídico",tickets=tickets,states=states,counts=counts,now=now)
+    all_tickets=s.query(LegalTicket).order_by(LegalTicket.created_at.desc()).all()
+    member_roles={x[0] for x in s.query(UserGroup.access_role).join(GroupMember,GroupMember.group_id==UserGroup.id).filter(GroupMember.user_id==u.id).all()}
+    can_manage=bool(u.role in ("admin","rh","gestor") or "juridico" in member_roles)
+    tickets=all_tickets if can_manage else [t for t in all_tickets if t.requester_user_id==u.id]
+    now=datetime.utcnow(); states={t.id:legal_sla_state(t,now)[0] for t in tickets}
+    due_dates={t.id:legal_sla_state(t,now)[1] for t in tickets}
+    closed=[t for t in tickets if t.closed_at]
+    on_time=sum(1 for t in closed if states[t.id]=="Concluído no SLA")
+    overdue=sum(1 for t in tickets if states[t.id] in ("Estourado","Concluído fora do SLA"))
+    durations=[(t.closed_at-t.created_at).total_seconds()/3600 for t in closed if t.closed_at]
+    avg=round(sum(durations)/len(durations),1) if durations else 0
+    stats={"total":len(tickets),"open":sum(1 for t in tickets if not t.closed_at),"on_time":on_time,"outside":overdue,"avg_hours":avg,"contracts":sum(1 for t in tickets if t.request_type in ("Contrato","NDA"))}
+    result=render("legal.html",user=u,tickets=tickets,states=states,due_dates=due_dates,stats=stats,now=now,can_manage=can_manage)
     s.close();return result
 
 @app.post("/legal/tickets")
-def legal_create_ticket(request:Request,subject:str=Form(...),request_type:str=Form("Contrato"),department:str=Form(""),requester:str=Form(""),requester_email:str=Form(""),counterparty:str=Form(""),description:str=Form(""),priority:str=Form("Normal"),responsible:str=Form(""),sla_hours:int=Form(72),document:UploadFile|None=File(None)):
+async def legal_create_ticket(request:Request,title:str=Form(...),request_type:str=Form("Contrato"),requester_name:str=Form(""),requester_department:str=Form(""),partner_name:str=Form(""),partner_type:str=Form("Parceiro"),description:str=Form(""),responsible:str=Form("Jurídico"),priority:str=Form("Normal"),sla_hours:int=Form(72),attachment:UploadFile|None=File(None)):
     s=db();u=require(request,s)
-    if not subject.strip() or sla_hours<1 or sla_hours>8760:
-        s.close();raise HTTPException(400,"Informe o assunto e um SLA entre 1 e 8.760 horas.")
+    if not title.strip() or sla_hours<1 or sla_hours>8760: s.close();raise HTTPException(400,"Informe título e SLA entre 1 e 8760 horas.")
     data=None;filename="";mime=""
-    if document and document.filename:
-        raw=document.file.read()
-        if len(raw)>20*1024*1024:
-            s.close();raise HTTPException(413,"O arquivo excede o limite de 20 MB.")
-        data=raw;filename=os.path.basename(document.filename)[:240];mime=document.content_type or "application/octet-stream"
-    now=datetime.utcnow()
-    protocol=f"JUR-{now:%Y%m%d}-{secrets.token_hex(3).upper()}"
-    ticket=LegalTicket(protocol=protocol,subject=subject.strip(),request_type=request_type,department=department,requester=requester or u.name,requester_email=requester_email or u.email,counterparty=counterparty,description=description,priority=priority,responsible=responsible,sla_hours=sla_hours,due_at=now+__import__("datetime").timedelta(hours=sla_hours),document_name=filename,document_mime=mime,document_data=data,created_by=u.id)
-    s.add(ticket);audit(s,request,u,"legal.ticket.created","legal_ticket",protocol,subject)
-    s.commit();s.close();return RedirectResponse("/legal",303)
+    if attachment and attachment.filename:
+        data=await attachment.read()
+        if len(data)>20*1024*1024: s.close();raise HTTPException(413,"Anexo limitado a 20 MB.")
+        filename=os.path.basename(attachment.filename)[:240];mime=attachment.content_type or "application/octet-stream"
+    code=f"JUR-{datetime.utcnow():%y%m%d}-{secrets.token_hex(2).upper()}"
+    row=LegalTicket(code=code,title=title.strip(),request_type=request_type,requester_name=requester_name.strip() or u.name,requester_user_id=u.id,requester_department=requester_department.strip() or u.department,partner_name=partner_name.strip(),partner_type=partner_type,responsible=responsible.strip() or "Jurídico",description=description.strip(),priority=priority,sla_hours=sla_hours,attachment_name=filename,attachment_mime=mime,attachment_data=data,created_by=u.id)
+    s.add(row);audit(s,request,u,"legal.ticket.created","legal_ticket",code,title.strip());s.commit();s.close()
+    return RedirectResponse("/legal",303)
 
 @app.post("/legal/tickets/{ticket_id}/update")
-def legal_update_ticket(request:Request,ticket_id:int,status:str=Form(...),responsible:str=Form(""),sla_hours:int=Form(...),resolution:str=Form("")):
-    s=db();u=require(request,s)
-    ticket=s.get(LegalTicket,ticket_id)
-    if not ticket:s.close();raise HTTPException(404,"Chamado jurídico não encontrado.")
-    if sla_hours<1 or sla_hours>8760:s.close();raise HTTPException(400,"SLA inválido.")
-    # Recalcula vencimento somente quando o SLA manual for alterado.
-    if ticket.sla_hours!=sla_hours:
-        ticket.sla_hours=sla_hours;ticket.due_at=ticket.created_at+__import__("datetime").timedelta(hours=sla_hours)
-    ticket.status=status;ticket.responsible=responsible;ticket.resolution=resolution
-    if status=="Concluído":
-        if not ticket.closed_at:ticket.closed_at=datetime.utcnow()
-    else:ticket.closed_at=None
-    ticket.updated_at=datetime.utcnow()
-    audit(s,request,u,"legal.ticket.updated","legal_ticket",ticket.protocol,f"status={status}; responsável={responsible}")
+def legal_update_ticket(ticket_id:int,request:Request,status:str=Form(...),responsible:str=Form(...),sla_hours:int=Form(...)):
+    s=db();u=require(request,s,["admin","rh","gestor","juridico"]);row=s.get(LegalTicket,ticket_id)
+    if not row: s.close();raise HTTPException(404)
+    if status not in ("Recebido","Em triagem","Em análise","Aguardando solicitante","Aguardando terceiro","Concluído","Cancelado") or sla_hours<1 or sla_hours>8760: s.close();raise HTTPException(400,"Status ou SLA inválido.")
+    row.status=status;row.responsible=responsible.strip()[:180];row.sla_hours=sla_hours
+    row.closed_at=datetime.utcnow() if status=="Concluído" else None
+    audit(s,request,u,"legal.ticket.updated","legal_ticket",row.code,f"Status={status}; responsável={responsible}; SLA={sla_hours}h")
     s.commit();s.close();return RedirectResponse("/legal",303)
 
-@app.get("/legal/tickets/{ticket_id}/document")
-def legal_ticket_document(request:Request,ticket_id:int):
-    s=db();require(request,s)
-    ticket=s.get(LegalTicket,ticket_id)
-    if not ticket or not ticket.document_data:s.close();raise HTTPException(404,"Documento não encontrado.")
+@app.get("/legal/tickets/{ticket_id}/attachment")
+def legal_attachment(ticket_id:int,request:Request):
     from fastapi.responses import Response
-    response=Response(ticket.document_data,media_type=ticket.document_mime or "application/octet-stream",headers={"Content-Disposition":f'attachment; filename="{ticket.document_name}"'})
-    s.close();return response
-
+    s=db();u=require(request,s);row=s.get(LegalTicket,ticket_id)
+    if not row or not row.attachment_data: s.close();raise HTTPException(404)
+    data=row.attachment_data;mime=row.attachment_mime or "application/octet-stream";name=re.sub(r'[^A-Za-z0-9._-]','_',row.attachment_name or "documento")
+    s.close();return Response(data,media_type=mime,headers={"Content-Disposition":f'attachment; filename="{name}"',"X-Content-Type-Options":"nosniff"})

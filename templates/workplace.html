@@ -23,7 +23,7 @@
   <article class="workplace-metric"><span class="metric-icon">▤</span><small>MINHAS MATRÍCULAS</small><strong>{{ my_enrollments }}</strong><span>Cursos e trilhas</span></article>
   <article class="workplace-metric"><span class="metric-icon">▶</span><small>EM ANDAMENTO</small><strong>{{ my_in_progress }}</strong><span>Treinamentos ativos</span></article>
   <article class="workplace-metric"><span class="metric-icon">✓</span><small>CONCLUÍDOS</small><strong>{{ my_completed }}</strong><span>Treinamentos finalizados</span></article>
-  <article class="workplace-metric"><span class="metric-icon">⌘</span><small>PROCESSOS DISPONÍVEIS</small><strong>{{ bpm_processes }}</strong><span>Gertec BPM</span></article>
+  <article class="workplace-metric"><span class="metric-icon">⌘</span><small>PROCESSOS DISPONÍVEIS</small><strong>{{ bpm_processes }}</strong><span>BPM</span></article>
 </div>
 {% endif %}
 
@@ -36,23 +36,18 @@
   </a>{% endif %}
   {% if module_states.get("bpm", true) %}<a class="workplace-module-card bpm" href="/bpm">
     <div class="workplace-module-top"><span class="workplace-module-icon">⌘</span><span class="module-state live">Disponível</span></div>
-    <h3>Gertec BPM</h3><p>Cadeia de valor, processos, subprocessos, documentação, modelagem BPMN e playbooks.</p>
+    <h3>BPM</h3><p>Cadeia de valor, processos, subprocessos, documentação, modelagem BPMN e playbooks.</p>
     <span class="module-link">Acessar BPM <b>→</b></span>
   </a>{% endif %}
   {% if module_states.get("bcm", true) %}<a class="workplace-module-card bcm" href="/bcm">
     <div class="workplace-module-top"><span class="workplace-module-icon">▦</span><span class="module-state live">Disponível</span></div>
-    <h3>Gertec BCM</h3><p>Business Impact Analysis, continuidade de negócios, BCP e recuperação de desastres.</p>
+    <h3>BCM</h3><p>Business Impact Analysis, continuidade de negócios, BCP e recuperação de desastres.</p>
     <span class="module-link">Acessar BCM <b>→</b></span>
   </a>{% endif %}
   {% if module_states.get("grc", true) %}<a class="workplace-module-card bcm" href="/grc">
     <div class="workplace-module-top"><span class="workplace-module-icon">◈</span><span class="module-state live">Disponível</span></div>
     <h3>Gertec GRC</h3><p>Riscos corporativos, requisitos normativos, controles, auditorias, não conformidades e planos de ação.</p>
     <span class="module-link">Acessar GRC <b>→</b></span>
-  </a>{% endif %}
-  {% if module_states.get("legal", true) %}<a class="workplace-module-card legal" href="/legal">
-    <div class="workplace-module-top"><span class="workplace-module-icon">⚖</span><span class="module-state live">Disponível</span></div>
-    <h3>Gertec Jurídico</h3><p>Solicitações jurídicas, contratos, NDA, responsáveis, prazos e acompanhamento de SLA.</p>
-    <span class="module-link">Acessar Jurídico <b>→</b></span>
   </a>{% endif %}
   <article class="workplace-module-card planned">
     <div class="workplace-module-top"><span class="workplace-module-icon">♙</span><span class="module-state">Planejado</span></div>

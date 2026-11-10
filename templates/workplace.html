@@ -49,6 +49,11 @@
     <h3>Gertec GRC</h3><p>Riscos corporativos, requisitos normativos, controles, auditorias, não conformidades e planos de ação.</p>
     <span class="module-link">Acessar GRC <b>→</b></span>
   </a>{% endif %}
+  {% if module_states.get("legal", true) %}<a class="workplace-module-card legal" href="/legal">
+    <div class="workplace-module-top"><span class="workplace-module-icon">⚖</span><span class="module-state live">Disponível</span></div>
+    <h3>Gertec Jurídico</h3><p>Solicitações jurídicas, contratos, NDA, responsáveis, prazos e acompanhamento de SLA.</p>
+    <span class="module-link">Acessar Jurídico <b>→</b></span>
+  </a>{% endif %}
   <article class="workplace-module-card planned">
     <div class="workplace-module-top"><span class="workplace-module-icon">♙</span><span class="module-state">Planejado</span></div>
     <h3>Gertec People</h3><p>Estrutura organizacional, competências, desenvolvimento e jornada do colaborador.</p>

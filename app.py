@@ -407,6 +407,32 @@ class BCMProcessLink(Base):
     created_at:Mapped[datetime]=mapped_column(DateTime,default=datetime.utcnow)
 
 
+
+class LegalTicket(Base):
+    __tablename__="legal_tickets"
+    id:Mapped[int]=mapped_column(primary_key=True)
+    protocol:Mapped[str]=mapped_column(String(30),unique=True,index=True)
+    subject:Mapped[str]=mapped_column(String(240),index=True)
+    request_type:Mapped[str]=mapped_column(String(80),default="Contrato")
+    department:Mapped[str]=mapped_column(String(160),default="")
+    requester:Mapped[str]=mapped_column(String(180),default="")
+    requester_email:Mapped[str]=mapped_column(String(240),default="")
+    counterparty:Mapped[str]=mapped_column(String(240),default="")
+    description:Mapped[str]=mapped_column(Text,default="")
+    priority:Mapped[str]=mapped_column(String(30),default="Normal")
+    status:Mapped[str]=mapped_column(String(40),default="Recebido",index=True)
+    responsible:Mapped[str]=mapped_column(String(180),default="")
+    sla_hours:Mapped[int]=mapped_column(Integer,default=72)
+    due_at:Mapped[datetime]=mapped_column(DateTime,index=True)
+    closed_at:Mapped[datetime|None]=mapped_column(DateTime,nullable=True)
+    resolution:Mapped[str]=mapped_column(Text,default="")
+    document_name:Mapped[str]=mapped_column(String(240),default="")
+    document_mime:Mapped[str]=mapped_column(String(100),default="")
+    document_data:Mapped[bytes|None]=mapped_column(LargeBinary,nullable=True)
+    created_by:Mapped[int|None]=mapped_column(ForeignKey("users.id"),nullable=True)
+    created_at:Mapped[datetime]=mapped_column(DateTime,default=datetime.utcnow,index=True)
+    updated_at:Mapped[datetime]=mapped_column(DateTime,default=datetime.utcnow,onupdate=datetime.utcnow)
+
 Base.metadata.create_all(engine)
 # Compatibilidade com bancos criados por versões anteriores do MVP.
 from sqlalchemy import inspect, text
@@ -505,7 +531,7 @@ def require(request,s,roles=None):
     effective_roles=set([u.role]+group_roles)
     if roles and not effective_roles.intersection(roles): raise HTTPException(403,"Acesso não autorizado.")
     path=request.url.path
-    module=("academy" if path.startswith(("/academy","/courses","/learn","/campaigns","/reports","/certificates")) else "bpm" if path.startswith("/bpm") else "bcm" if path.startswith("/bcm") else "grc" if path.startswith("/grc") else "forum" if path.startswith("/forum") else "dashboard" if path=="/" else None)
+    module=("academy" if path.startswith(("/academy","/courses","/learn","/campaigns","/reports","/certificates")) else "bpm" if path.startswith("/bpm") else "bcm" if path.startswith("/bcm") else "grc" if path.startswith("/grc") else "legal" if path.startswith("/legal") else "forum" if path.startswith("/forum") else "dashboard" if path=="/" else None)
     if module in MODULES and not module_enabled(module): raise HTTPException(404,"Este módulo está desabilitado globalmente pelo administrador.")
     if module and "admin" not in effective_roles:
         role_perms=[s.query(RoleModule).filter_by(role=role,module=module).first() for role in effective_roles if role in ("rh","gestor","colaborador")]
@@ -1514,7 +1540,7 @@ async def save_permissions(request:Request):
             if not row:s.add(RoleModule(role=role,module=module,enabled=enabled))
             else:row.enabled=enabled
     s.commit();s.close();return RedirectResponse("/admin/permissions",303)
-MODULES = {"academy":"Gertec Academy","bpm":"Gertec BPM","bcm":"Gertec BCM","grc":"Gertec GRC"}
+MODULES = {"academy":"Gertec Academy","bpm":"Gertec BPM","bcm":"Gertec BCM","grc":"Gertec GRC","legal":"Gertec Jurídico"}
 
 def module_enabled(key):
     return get_setting(f"module_{key}", "1") != "0"
@@ -1540,9 +1566,9 @@ def workplace_access_permissions(request:Request,role:str=Form(...),module:str=F
     s.commit();s.close();return RedirectResponse("/workplace/access",303)
 
 @app.post("/workplace/modules")
-def workplace_modules(request:Request,academy:str=Form("0"),bpm:str=Form("0"),bcm:str=Form("0"),grc:str=Form("0")):
+def workplace_modules(request:Request,academy:str=Form("0"),bpm:str=Form("0"),bcm:str=Form("0"),grc:str=Form("0"),legal:str=Form("0")):
     s=db();actor=require(request,s,["admin"])
-    for key,value in {"academy":academy,"bpm":bpm,"bcm":bcm,"grc":grc}.items(): set_setting(s,f"module_{key}","1" if value=="1" else "0")
+    for key,value in {"academy":academy,"bpm":bpm,"bcm":bcm,"grc":grc,"legal":legal}.items(): set_setting(s,f"module_{key}","1" if value=="1" else "0")
     audit(s,request,actor,"modules.global.updated","modules","global","Status dos módulos atualizado")
     s.commit();s.close();return RedirectResponse("/admin/settings?modules_saved=1",303)
 
@@ -1990,4 +2016,72 @@ def issue_campaign_certificate_if_complete(s, user_id:int, campaign_id:int):
     s.add(cert)
     return cert
 
+
+
+
+# ---------------- GERTEC JURIDICO ----------------
+def legal_sla_state(ticket, now=None):
+    now=now or datetime.utcnow()
+    if ticket.status in ("Concluído","Cancelado"):
+        end=ticket.closed_at or now
+        return "within" if end <= ticket.due_at else "breached"
+    return "breached" if now > ticket.due_at else ("warning" if (ticket.due_at-now).total_seconds() <= 8*3600 else "within")
+
+@app.get("/legal",response_class=HTMLResponse)
+def legal_home(request:Request):
+    s=db();u=require(request,s)
+    tickets=s.query(LegalTicket).order_by(LegalTicket.created_at.desc()).all()
+    now=datetime.utcnow()
+    states=[(t,legal_sla_state(t,now)) for t in tickets]
+    open_items=[t for t in tickets if t.status not in ("Concluído","Cancelado")]
+    closed=[t for t in tickets if t.status=="Concluído"]
+    within=sum(1 for t in closed if legal_sla_state(t,now)=="within")
+    outside=sum(1 for t in closed if legal_sla_state(t,now)=="breached")
+    avg_hours=round(sum(((t.closed_at or now)-t.created_at).total_seconds()/3600 for t in closed)/len(closed),1) if closed else 0
+    counts={"total":len(tickets),"open":len(open_items),"closed":len(closed),"within":within,"outside":outside,"overdue":sum(1 for t in open_items if legal_sla_state(t,now)=="breached"),"avg_hours":avg_hours}
+    result=render("legal.html",user=u,title="Gertec Jurídico",tickets=tickets,states=states,counts=counts,now=now)
+    s.close();return result
+
+@app.post("/legal/tickets")
+def legal_create_ticket(request:Request,subject:str=Form(...),request_type:str=Form("Contrato"),department:str=Form(""),requester:str=Form(""),requester_email:str=Form(""),counterparty:str=Form(""),description:str=Form(""),priority:str=Form("Normal"),responsible:str=Form(""),sla_hours:int=Form(72),document:UploadFile|None=File(None)):
+    s=db();u=require(request,s)
+    if not subject.strip() or sla_hours<1 or sla_hours>8760:
+        s.close();raise HTTPException(400,"Informe o assunto e um SLA entre 1 e 8.760 horas.")
+    data=None;filename="";mime=""
+    if document and document.filename:
+        raw=document.file.read()
+        if len(raw)>20*1024*1024:
+            s.close();raise HTTPException(413,"O arquivo excede o limite de 20 MB.")
+        data=raw;filename=os.path.basename(document.filename)[:240];mime=document.content_type or "application/octet-stream"
+    now=datetime.utcnow()
+    protocol=f"JUR-{now:%Y%m%d}-{secrets.token_hex(3).upper()}"
+    ticket=LegalTicket(protocol=protocol,subject=subject.strip(),request_type=request_type,department=department,requester=requester or u.name,requester_email=requester_email or u.email,counterparty=counterparty,description=description,priority=priority,responsible=responsible,sla_hours=sla_hours,due_at=now+__import__("datetime").timedelta(hours=sla_hours),document_name=filename,document_mime=mime,document_data=data,created_by=u.id)
+    s.add(ticket);audit(s,request,u,"legal.ticket.created","legal_ticket",protocol,subject)
+    s.commit();s.close();return RedirectResponse("/legal",303)
+
+@app.post("/legal/tickets/{ticket_id}/update")
+def legal_update_ticket(request:Request,ticket_id:int,status:str=Form(...),responsible:str=Form(""),sla_hours:int=Form(...),resolution:str=Form("")):
+    s=db();u=require(request,s)
+    ticket=s.get(LegalTicket,ticket_id)
+    if not ticket:s.close();raise HTTPException(404,"Chamado jurídico não encontrado.")
+    if sla_hours<1 or sla_hours>8760:s.close();raise HTTPException(400,"SLA inválido.")
+    # Recalcula vencimento somente quando o SLA manual for alterado.
+    if ticket.sla_hours!=sla_hours:
+        ticket.sla_hours=sla_hours;ticket.due_at=ticket.created_at+__import__("datetime").timedelta(hours=sla_hours)
+    ticket.status=status;ticket.responsible=responsible;ticket.resolution=resolution
+    if status=="Concluído":
+        if not ticket.closed_at:ticket.closed_at=datetime.utcnow()
+    else:ticket.closed_at=None
+    ticket.updated_at=datetime.utcnow()
+    audit(s,request,u,"legal.ticket.updated","legal_ticket",ticket.protocol,f"status={status}; responsável={responsible}")
+    s.commit();s.close();return RedirectResponse("/legal",303)
+
+@app.get("/legal/tickets/{ticket_id}/document")
+def legal_ticket_document(request:Request,ticket_id:int):
+    s=db();require(request,s)
+    ticket=s.get(LegalTicket,ticket_id)
+    if not ticket or not ticket.document_data:s.close();raise HTTPException(404,"Documento não encontrado.")
+    from fastapi.responses import Response
+    response=Response(ticket.document_data,media_type=ticket.document_mime or "application/octet-stream",headers={"Content-Disposition":f'attachment; filename="{ticket.document_name}"'})
+    s.close();return response
 

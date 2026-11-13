@@ -442,6 +442,42 @@ if "password_hash" not in [c["name"] for c in inspect(engine).get_columns("users
     with engine.begin() as conn:
         conn.execute(text("ALTER TABLE users ADD COLUMN password_hash VARCHAR(300)"))
 
+# Migração aditiva do módulo Jurídico para bancos que já possuíam legal_tickets.
+# create_all não altera tabelas existentes; por isso adicionamos colunas ausentes sem perder registros.
+with engine.begin() as conn:
+    if inspect(engine).has_table("legal_tickets"):
+        legal_cols = {c["name"] for c in inspect(engine).get_columns("legal_tickets")}
+        legal_additions = {
+            "code": "VARCHAR(32)",
+            "title": "VARCHAR(240) NOT NULL DEFAULT ''",
+            "request_type": "VARCHAR(60) NOT NULL DEFAULT 'Contrato'",
+            "requester_name": "VARCHAR(180) NOT NULL DEFAULT ''",
+            "requester_user_id": "INTEGER NULL",
+            "requester_department": "VARCHAR(160) NOT NULL DEFAULT ''",
+            "partner_name": "VARCHAR(240) NOT NULL DEFAULT ''",
+            "partner_type": "VARCHAR(40) NOT NULL DEFAULT 'Parceiro'",
+            "description": "TEXT NOT NULL DEFAULT ''",
+            "responsible": "VARCHAR(180) NOT NULL DEFAULT 'Jurídico'",
+            "status": "VARCHAR(40) NOT NULL DEFAULT 'Recebido'",
+            "priority": "VARCHAR(30) NOT NULL DEFAULT 'Normal'",
+            "sla_hours": "INTEGER NOT NULL DEFAULT 72",
+            "created_at": "TIMESTAMP NULL",
+            "updated_at": "TIMESTAMP NULL",
+            "closed_at": "TIMESTAMP NULL",
+            "attachment_name": "VARCHAR(240) NOT NULL DEFAULT ''",
+            "attachment_mime": "VARCHAR(100) NOT NULL DEFAULT ''",
+            "attachment_data": "BYTEA NULL",
+            "created_by": "INTEGER NULL",
+        }
+        for col_name, col_type in legal_additions.items():
+            if col_name not in legal_cols:
+                conn.execute(text(f"ALTER TABLE legal_tickets ADD COLUMN {col_name} {col_type}"))
+        conn.execute(text("UPDATE legal_tickets SET code = 'LEG-' || LPAD(id::text, 6, '0') WHERE code IS NULL OR code = ''"))
+        conn.execute(text("UPDATE legal_tickets SET created_at = CURRENT_TIMESTAMP WHERE created_at IS NULL"))
+        conn.execute(text("UPDATE legal_tickets SET updated_at = created_at WHERE updated_at IS NULL"))
+        conn.execute(text("ALTER TABLE legal_tickets ALTER COLUMN code SET NOT NULL"))
+        conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_legal_tickets_code ON legal_tickets (code)"))
+
 # Migrações aditivas para bancos já utilizados no MVP.
 with engine.begin() as conn:
     campaign_cols={c["name"] for c in inspect(engine).get_columns("campaigns")}

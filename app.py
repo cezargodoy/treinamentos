@@ -547,7 +547,7 @@ def render(name,**ctx):
         "campaign_edit.html", "reports.html", "certificates.html",
         "directory.html", "forum.html", "profile.html", "users.html",
         "user_edit.html", "groups.html", "permissions.html", "audit.html",
-        "communications.html", "settings.html", "setup.html"
+        "communications.html", "setup.html"
     }
     ctx.setdefault("academy_mode", name in academy_templates)
     ctx.setdefault("module_states", {k: module_enabled(k) for k in MODULES})
@@ -2028,8 +2028,11 @@ def issue_campaign_certificate_if_complete(s, user_id:int, campaign_id:int):
 
 # Gertec Jurídico — gestão de solicitações, contratos, NDA e SLA
 def legal_sla_state(ticket, now=None):
+    # Normaliza registros antigos/incompletos para evitar falhas no painel.
+    from datetime import timedelta
     now=now or datetime.utcnow()
-    due=ticket.created_at + __import__("datetime").timedelta(hours=max(1,ticket.sla_hours))
+    created_at=ticket.created_at or now
+    due=created_at + timedelta(hours=max(1, int(ticket.sla_hours or 72)))
     end=ticket.closed_at or now
     if ticket.closed_at: return ("Concluído no SLA" if ticket.closed_at<=due else "Concluído fora do SLA"), due
     if end > due: return "Estourado", due
@@ -2040,6 +2043,9 @@ def legal_sla_state(ticket, now=None):
 
 @app.get("/legal",response_class=HTMLResponse)
 def legal_home(request:Request):
+    # Garante a existência da tabela do módulo em bancos já utilizados por versões anteriores.
+    # Operação aditiva: não remove nem recria tabelas ou registros existentes.
+    Base.metadata.create_all(bind=engine, tables=[LegalTicket.__table__])
     s=db();u=require(request,s)
     all_tickets=s.query(LegalTicket).order_by(LegalTicket.created_at.desc()).all()
     member_roles={x[0] for x in s.query(UserGroup.access_role).join(GroupMember,GroupMember.group_id==UserGroup.id).filter(GroupMember.user_id==u.id).all()}

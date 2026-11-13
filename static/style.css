@@ -185,3 +185,10 @@ a.workplace-module-card:hover{transform:translateY(-2px);box-shadow:0 10px 25px 
 @media(max-width:650px){.bpm-value-map{padding:10px}.bpm-map-caption{align-items:flex-start;flex-direction:column}.bpm-value-chain{grid-template-columns:repeat(2,minmax(0,1fr))}.bpm-value-node{clip-path:none!important;border-radius:7px;min-height:80px;padding:10px}.bpm-map-lower,.bpm-map-chain-processes{grid-template-columns:1fr}.bpm-map-items{grid-template-columns:1fr}.bpm-map-panel header{align-items:flex-start;flex-direction:column}}
 
 .workplace-admin-nav{margin:4px 0 8px;color:#536174}.workplace-admin-nav summary{cursor:pointer;padding:11px 12px;border-radius:8px;font-weight:700;list-style:none}.workplace-admin-nav summary::-webkit-details-marker{display:none}.workplace-admin-nav[open] summary{background:#edf3f9;color:#17345f}.workplace-admin-nav a{display:block;margin-left:18px;padding:9px 12px;color:#536174;text-decoration:none;border-left:2px solid #dbe5f0;font-size:12px}.workplace-admin-nav a:hover{background:#f2f6fb;color:#14539a}.campaign-edit-btn{background:#f4bd35;color:#46330a;padding:8px 12px;border-radius:7px;text-decoration:none;font-size:11px;font-weight:700;display:inline-block;margin-right:8px}.campaign-edit-btn:hover{background:#e9ad1d}
+
+/* v2.4.1 — navegação da Administração Central */
+.workplace-sidebar .workplace-admin-nav{display:block;width:100%;margin:4px 0 10px}
+.workplace-sidebar .workplace-admin-nav summary{display:block;width:100%;white-space:normal}
+.workplace-sidebar .workplace-admin-links{display:flex;flex-direction:column;align-items:stretch;width:100%;margin-top:3px}
+.workplace-sidebar .workplace-admin-links a{display:block!important;width:100%;box-sizing:border-box;margin:0 0 3px 12px;padding:10px 12px;border-left:2px solid #dbe5f0;line-height:1.35;white-space:normal}
+.workplace-sidebar .workplace-admin-links a:last-child{margin-bottom:0}
